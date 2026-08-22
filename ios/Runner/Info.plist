@@ -26,6 +26,14 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Doc Manager needs camera access to scan documents and record videos.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Doc Manager needs microphone access to record audio with videos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Doc Manager needs photo library access so you can import photos and videos.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Doc Manager needs photo library access to save photos and videos.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

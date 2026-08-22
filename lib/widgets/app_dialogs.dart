@@ -142,33 +142,32 @@ class AppDialogs {
   }) {
     return showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.only(bottom: AppSpacing.s3),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: actions
-                .map(
-                  (action) => ListTile(
-                    leading: Icon(
-                      action.icon,
-                      color: action.destructive
-                          ? AppColors.error500
-                          : AppColors.neutral700,
-                    ),
-                    title: Text(
-                      action.label,
-                      style: TextStyle(
-                        color: action.destructive
-                            ? AppColors.error500
-                            : AppColors.neutral1300,
-                        fontWeight: FontWeight.w500,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: actions
+                  .map(
+                    (action) => ListTile(
+                      leading: Icon(
+                        action.icon,
+                        color: action.destructive ? AppColors.error500 : null,
                       ),
+                      title: Text(
+                        action.label,
+                        style: TextStyle(
+                          color: action.destructive ? AppColors.error500 : null,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      onTap: () => Navigator.pop(ctx, action.id),
                     ),
-                    onTap: () => Navigator.pop(ctx, action.id),
-                  ),
-                )
-                .toList(),
+                  )
+                  .toList(),
+            ),
           ),
         ),
       ),
