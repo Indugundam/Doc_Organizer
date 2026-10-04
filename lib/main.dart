@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'screens/home_screen.dart';
 import 'services/sort_controller.dart';
+import 'services/sync_service.dart';
 import 'theme/app_theme.dart';
 import 'theme/theme_controller.dart';
 
@@ -9,6 +10,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ThemeController.load();
   await SortController.load();
+  // Not awaited: signing in silently and the first sync run in the background.
+  SyncService.init();
   runApp(const DocManagerApp());
 }
 

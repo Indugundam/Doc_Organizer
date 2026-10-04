@@ -13,6 +13,7 @@ import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
 import '../services/sort_controller.dart';
 import '../services/storage_service.dart';
+import '../services/sync_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../utils/file_type_style.dart';
@@ -43,11 +44,13 @@ class _FolderScreenState extends State<FolderScreen> {
     super.initState();
     _load();
     SortController.order.addListener(_load);
+    SyncService.localChanges.addListener(_load);
   }
 
   @override
   void dispose() {
     SortController.order.removeListener(_load);
+    SyncService.localChanges.removeListener(_load);
     super.dispose();
   }
 
@@ -68,6 +71,15 @@ class _FolderScreenState extends State<FolderScreen> {
   }
 
   Future<void> _load() async {
+    if (!await widget.folder.exists()) {
+      // Deleted or renamed elsewhere (e.g. by Drive sync); close this screen.
+      if (!mounted) return;
+      final route = ModalRoute.of(context);
+      if (route != null && route.isActive) {
+        Navigator.removeRoute(context, route);
+      }
+      return;
+    }
     final folders = await StorageService.listSubfolders(widget.folder);
     final docs = await StorageService.listDocuments(widget.folder);
     if (!mounted) return;
@@ -393,6 +405,24 @@ class _FolderScreenState extends State<FolderScreen> {
     }
   }
 
+  Future<void> _renameDocument(File file) async {
+    final current = p.basenameWithoutExtension(file.path);
+    final name = await AppDialogs.promptForName(
+      context,
+      title: 'Rename document',
+      icon: FluentIcons.rename_24_regular,
+      initial: current,
+      confirmLabel: 'Save',
+    );
+    if (name == null || name.trim().isEmpty || name == current) return;
+    try {
+      await StorageService.renameDocument(file, name);
+      await _load();
+    } catch (e) {
+      _showError(e);
+    }
+  }
+
   Future<void> _deleteDocument(File file) async {
     final confirmed = await AppDialogs.confirmDelete(
       context,
@@ -409,6 +439,11 @@ class _FolderScreenState extends State<FolderScreen> {
     final choice = await AppDialogs.showActionSheet(
       context,
       actions: [
+        const AppSheetAction(
+          id: 'rename',
+          icon: FluentIcons.rename_24_regular,
+          label: 'Rename',
+        ),
         const AppSheetAction(
           id: 'share',
           icon: FluentIcons.share_24_regular,
@@ -428,6 +463,8 @@ class _FolderScreenState extends State<FolderScreen> {
       ],
     );
     switch (choice) {
+      case 'rename':
+        await _renameDocument(file);
       case 'share':
         await _shareDocument(file);
       case 'download':
