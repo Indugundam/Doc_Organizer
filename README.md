@@ -7,8 +7,9 @@ gallery, or importing an existing file (PDF, etc.).
 
 Everything is stored locally on the device, under the app's private storage
 folder. Optionally, users can connect their Google account in Settings to
-two-way sync their folders with a `DocManager` folder in their own Google
-Drive. There is no server of ours involved - the app talks to Google Drive
+back up their folders to a `DocManager` folder in their own Google Drive.
+Backup is one-way: Drive mirrors the device, and nothing is ever downloaded
+to the device. There is no server of ours involved - the app talks to Google Drive
 directly.
 
 ## Installing the APK on your phone
@@ -63,7 +64,7 @@ clone needs its own copy:
   and documents are plain directories/files on disk
   (`<app documents dir>/DocManager/<folder>/<file>`), so the structure you
   see in the app is exactly what's on disk.
-- `lib/services/sync_service.dart` — Google sign-in and two-way Drive sync.
+- `lib/services/sync_service.dart` — Google sign-in and one-way Drive backup.
 - `lib/screens/home_screen.dart` — folder list (create/rename/delete).
 - `lib/screens/folder_screen.dart` — documents inside a folder (scan with
   camera, pick from gallery, or import a file).

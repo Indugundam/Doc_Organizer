@@ -24,25 +24,26 @@ class SyncStatus {
   final String? message;
 }
 
-/// Two-way sync between the local `DocManager` directory and a `DocManager`
-/// folder in the user's Google Drive.
+/// One-way backup of the local `DocManager` directory to a `DocManager`
+/// folder in the user's Google Drive. The device is the source of truth:
+/// nothing is ever downloaded or changed on the device.
 ///
 /// Uses the `drive.file` scope, so the app only ever sees files it created
-/// itself (on any device signed in to the same account), never the rest of
-/// the user's Drive.
+/// itself, never the rest of the user's Drive.
 ///
-/// Reconciliation is driven by a small state file that remembers, for every
-/// relative path, the Drive file ID and the local/remote modified times seen
-/// at the last successful sync. Comparing against it tells us which side
-/// changed:
-/// - present on one side only, and known in state -> deleted on the other
-///   side, so delete it here too (remote deletes go to Drive's trash).
-/// - present on one side only, unknown -> new, so copy it across.
-/// - present on both -> whichever side changed wins; if both did, newer wins.
+/// A small state file maps every local relative path to the Drive file ID it
+/// was uploaded as, plus the local/remote modified times at that upload.
+/// Each sync makes Drive match the device:
+/// - new on the device -> uploaded.
+/// - changed on the device, or edited in Drive -> device copy re-uploaded.
+/// - renamed/moved on the device ([recordLocalMove] re-keys the state), or
+///   renamed/moved in Drive -> the Drive copy is renamed/moved back to match.
+/// - deleted on the device -> moved to Drive's trash.
+/// - deleted from Drive -> uploaded again.
 ///
-/// Renames are tracked by Drive file ID so they move the file instead of
-/// re-uploading it: local renames are recorded via [recordLocalMove], and
-/// remote renames show up as a known ID at a new path.
+/// Files in Drive the state doesn't know about (from another device, an
+/// earlier install or another sign-in) are linked when they sit at the same
+/// path, and otherwise left alone - never deleted.
 class SyncService {
   static const _scopes = [drive.DriveApi.driveFileScope];
   static const _folderMime = 'application/vnd.google-apps.folder';
@@ -53,16 +54,12 @@ class SyncService {
     const SyncStatus(SyncPhase.notConfigured),
   );
 
-  /// Bumped after a sync that changed local files, so screens can reload.
-  static final localChanges = ValueNotifier<int>(0);
-
   static GoogleSignInAccount? _account;
   static _SyncState _state = _SyncState();
   static Future<void>? _initFuture;
   static Timer? _timer;
   static bool _running = false;
   static bool _again = false;
-  static bool _localDirty = false;
 
   static Future<void> init() => _initFuture ??= _init();
 
@@ -99,8 +96,8 @@ class SyncService {
     );
     await account.authorizationClient.authorizeScopes(_scopes);
     if (_state.account != account.email) {
-      // A different account has a different Drive; never carry state over,
-      // or its absence of files would look like deletions.
+      // A different account has a different Drive; file IDs from the old
+      // one mean nothing there.
       _state = _SyncState()..account = account.email;
       await _state.save();
     }
@@ -137,10 +134,7 @@ class SyncService {
   /// next sync renames the Drive copy instead of deleting and re-uploading.
   static Future<void> recordLocalMove(String fromPath, String toPath) async {
     final root = await StorageService.rootDir();
-    final from = _relative(root, fromPath);
-    final to = _relative(root, toPath);
-    _state.rekey(from, to);
-    _state.entries[to]?.moved = true;
+    _state.rekey(_relative(root, fromPath), _relative(root, toPath));
     await _state.save();
   }
 
@@ -172,10 +166,6 @@ class SyncService {
     } finally {
       _running = false;
       await _state.save();
-      if (_localDirty) {
-        _localDirty = false;
-        localChanges.value++;
-      }
     }
   }
 
@@ -188,24 +178,18 @@ class SyncService {
       final api = drive.DriveApi(client);
       final root = await StorageService.rootDir();
       final rootId = await _ensureRemoteRoot(api);
-
-      // Apply renames one at a time, rescanning after each, because moving a
-      // folder changes the paths of everything inside it.
-      for (var i = 0; i < 100; i++) {
-        final remote = await _scanRemote(api, rootId);
-        if (!await _applyOneMove(api, root, rootId, remote)) break;
-      }
-
-      await _reconcile(api, root, rootId);
+      final local = await _scanLocal(root);
+      final remote = await _scanRemote(api, rootId);
+      await _mirror(api, root, rootId, local, remote);
+      await _trashDeleted(api, local, remote);
     } finally {
       client.close();
     }
   }
 
   /// Finds (or creates) the app's root folder in Drive. If it changed since
-  /// the last sync - e.g. the user deleted it in Drive - the old state is
-  /// dropped so nothing is mistaken for a deletion; the next pass then just
-  /// merges both sides.
+  /// the last sync - e.g. the user deleted it in Drive - the old file IDs
+  /// are dropped and everything is uploaded again.
   static Future<String> _ensureRemoteRoot(drive.DriveApi api) async {
     final known = _state.rootId;
     if (known != null) {
@@ -241,174 +225,120 @@ class SyncService {
     return id;
   }
 
-  /// Applies the first pending rename found, in either direction. Returns
-  /// false when there is nothing left to move.
-  static Future<bool> _applyOneMove(
+  /// Makes every local folder and file exist in Drive, in the right place,
+  /// with the current content.
+  static Future<void> _mirror(
     drive.DriveApi api,
     Directory root,
     String rootId,
+    Map<String, _LocalItem> local,
     _RemoteTree remote,
   ) async {
-    for (final key in _sortedByDepth(_state.entries.keys)) {
-      final entry = _state.entries[key]!;
-      final item = remote.byId[entry.id];
-      if (item == null || item.path == key) {
-        entry.moved = false;
+    // Parents sort before children, so a folder always exists in Drive (and
+    // its ID is known) before anything inside it is handled.
+    final folderIds = <String, String>{'.': rootId};
+    final claimed = {for (final e in _state.entries.values) e.id};
+
+    for (final path in _sortedByDepth(local.keys)) {
+      final l = local[path]!;
+      final parentId = folderIds[p.posix.dirname(path)];
+      if (parentId == null) continue; // Parent failed; retry next sync.
+      final name = p.posix.basename(path);
+
+      var s = _state.entries[path];
+      if (s != null && s.isDir != l.isDir) {
+        _state.entries.remove(path); // Replaced by a file/folder of the
+        s = null; //                   other kind; treat as new.
+      }
+      var r = s == null ? null : remote.byId[s.id];
+
+      // Not tracked (first sync, new sign-in, reinstall, or deleted from
+      // Drive): reuse an untracked Drive item at the same path, if any.
+      if (r == null) {
+        final candidate = remote.byPath[path];
+        if (candidate != null &&
+            candidate.isDir == l.isDir &&
+            !claimed.contains(candidate.id)) {
+          r = candidate;
+          claimed.add(r.id);
+          if (!l.isDir && l.size == r.size) {
+            // Same file already backed up; just start tracking it.
+            s = _SyncEntry(r.id, localMs: l.modifiedMs, remoteMs: r.modifiedMs);
+            _state.entries[path] = s;
+          } else {
+            s = null;
+          }
+        }
+      }
+
+      if (r == null) {
+        final id = await _create(api, root, path, l, parentId);
+        if (l.isDir) folderIds[path] = id;
+        claimed.add(id);
         continue;
       }
 
-      if (entry.moved) {
-        // Renamed locally: rename/move the Drive copy to match.
-        final parentId = remote.folderId(p.posix.dirname(key), rootId);
-        if (parentId == null) {
-          // Can't place it; forget it so it re-uploads rather than being
-          // treated as deleted.
-          _state.entries.remove(key);
-          continue;
+      // Renamed or moved (here, or by someone in Drive): put it back where
+      // the device has it.
+      if (r.parentId != parentId || r.name != name) {
+        final sameParent = r.parentId == parentId;
+        final metadata = drive.File()..name = name;
+        // Pin the modified time so a rename alone doesn't look like a
+        // content edit and trigger a re-upload next time.
+        if (!l.isDir) {
+          metadata.modifiedTime = DateTime.fromMillisecondsSinceEpoch(
+            r.modifiedMs,
+          ).toUtc();
         }
-        final sameParent = parentId == item.parentId;
         await api.files.update(
-          drive.File()..name = p.posix.basename(key),
-          entry.id,
+          metadata,
+          r.id,
           addParents: sameParent ? null : parentId,
-          removeParents: sameParent ? null : item.parentId,
+          removeParents: sameParent ? null : r.parentId,
           $fields: 'id',
         );
-        entry.moved = false;
-        return true;
       }
 
-      // Renamed in Drive: rename the local copy to match.
-      final from = _absolute(root, key);
-      final to = _absolute(root, item.path);
-      final type = FileSystemEntity.typeSync(from, followLinks: false);
-      if (type == FileSystemEntityType.notFound ||
-          FileSystemEntity.typeSync(to) != FileSystemEntityType.notFound) {
-        continue;
+      if (l.isDir) {
+        folderIds[path] = r.id;
+        _state.entries[path] = _SyncEntry(r.id, isDir: true);
+      } else if (s == null ||
+          s.localMs != l.modifiedMs ||
+          s.remoteMs != r.modifiedMs) {
+        await _uploadContent(api, root, path, l, existingId: r.id);
       }
-      await Directory(p.dirname(to)).create(recursive: true);
-      if (type == FileSystemEntityType.directory) {
-        await Directory(from).rename(to);
-      } else {
-        await File(from).rename(to);
-      }
-      _state.rekey(key, item.path);
-      _localDirty = true;
-      return true;
     }
-    return false;
   }
 
-  static Future<void> _reconcile(
+  /// Moves Drive copies of anything deleted on the device to Drive's trash,
+  /// where they stay recoverable for 30 days.
+  static Future<void> _trashDeleted(
     drive.DriveApi api,
-    Directory root,
-    String rootId,
+    Map<String, _LocalItem> local,
+    _RemoteTree remote,
   ) async {
-    final local = await _scanLocal(root);
-    final remote = await _scanRemote(api, rootId);
-    final paths = _sortedByDepth({
-      ...local.keys,
-      ...remote.byPath.keys,
-      ..._state.entries.keys,
-    });
-    // Parents sort before children, so a folder is always created (and its
-    // ID known) before anything inside it is uploaded.
-    final folderIds = <String, String>{
-      '.': rootId,
-      for (final item in remote.byPath.values)
-        if (item.isDir) item.path: item.id,
-    };
-    final removed = <String>[];
-
-    for (final path in paths) {
-      if (removed.any((r) => p.posix.isWithin(r, path))) continue;
-      final l = local[path];
-      final r = remote.byPath[path];
-      final known = _state.entries.containsKey(path);
-
-      if (l == null && r == null) {
-        _state.entries.remove(path);
-      } else if (l != null && r != null) {
-        if (l.isDir != r.isDir) continue; // File vs folder clash; leave it.
-        if (l.isDir) {
-          _state.entries[path] = _SyncEntry(r.id, isDir: true);
-        } else {
-          await _reconcileFile(api, root, path, l, r, folderIds);
-        }
-      } else if (l != null) {
-        // Only on this device. If it was synced before (and nothing new was
-        // added under it since), it was deleted in Drive.
-        if (known && !_hasUnsyncedUnder(path, local.keys)) {
-          await _deleteLocal(root, path, l);
-          removed.add(path);
-        } else {
-          _state.removeUnder(path);
-          await _upload(api, root, path, l, folderIds);
-        }
-      } else {
-        // Only in Drive. Same idea, mirrored.
-        if (known && !_hasUnsyncedUnder(path, remote.byPath.keys)) {
-          await api.files.update(drive.File()..trashed = true, r!.id);
-          _state.removeUnder(path);
-          removed.add(path);
-        } else {
-          _state.removeUnder(path);
-          await _download(api, root, path, r!);
-        }
+    final trashed = <String>[];
+    for (final path in _sortedByDepth(_state.entries.keys)) {
+      if (local.containsKey(path)) continue;
+      final id = _state.entries.remove(path)!.id;
+      // Trashing a folder trashes everything inside it.
+      if (trashed.any((t) => p.posix.isWithin(t, path))) continue;
+      if (remote.byId.containsKey(id)) {
+        await api.files.update(drive.File()..trashed = true, id);
       }
+      trashed.add(path);
     }
   }
 
-  static Future<void> _reconcileFile(
+  // --- Uploads ---------------------------------------------------------------
+
+  static Future<String> _create(
     drive.DriveApi api,
     Directory root,
     String path,
     _LocalItem l,
-    _RemoteItem r,
-    Map<String, String> folderIds,
+    String parentId,
   ) async {
-    final s = _state.entries[path];
-    final bool uploadLocal;
-    if (s == null) {
-      // Both sides have it but we've never linked them (first sync, or a
-      // lost state file). Same size means same file; otherwise newer wins.
-      if (l.size == r.size) {
-        _state.entries[path] = _SyncEntry(
-          r.id,
-          localMs: l.modifiedMs,
-          remoteMs: r.modifiedMs,
-        );
-        return;
-      }
-      uploadLocal = l.modifiedMs > r.modifiedMs;
-    } else {
-      final localChanged = l.modifiedMs != s.localMs;
-      final remoteChanged = r.modifiedMs != s.remoteMs || s.id != r.id;
-      if (!localChanged && !remoteChanged) return;
-      uploadLocal =
-          localChanged && (!remoteChanged || l.modifiedMs >= r.modifiedMs);
-    }
-
-    if (uploadLocal) {
-      await _upload(api, root, path, l, folderIds, existingId: r.id);
-    } else {
-      await _download(api, root, path, r);
-    }
-  }
-
-  // --- Transfers -------------------------------------------------------------
-
-  static Future<void> _upload(
-    drive.DriveApi api,
-    Directory root,
-    String path,
-    _LocalItem l,
-    Map<String, String> folderIds, {
-    String? existingId,
-  }) async {
-    final parentId = folderIds[p.posix.dirname(path)];
-    if (parentId == null) return; // Parent failed to upload; retry next sync.
-
     if (l.isDir) {
       final created = await api.files.create(
         drive.File()
@@ -417,18 +347,29 @@ class SyncService {
           ..parents = [parentId],
         $fields: 'id',
       );
-      folderIds[path] = created.id!;
       _state.entries[path] = _SyncEntry(created.id!, isDir: true);
-      return;
+      return created.id!;
     }
+    return _uploadContent(api, root, path, l, parentId: parentId);
+  }
 
+  /// Uploads the file's content, either as a new Drive file in [parentId] or
+  /// over the existing one at [existingId].
+  static Future<String> _uploadContent(
+    drive.DriveApi api,
+    Directory root,
+    String path,
+    _LocalItem l, {
+    String? parentId,
+    String? existingId,
+  }) async {
     final file = File(_absolute(root, path));
     final media = drive.Media(file.openRead(), l.size);
     final options = l.size > 5 * 1024 * 1024
         ? drive.UploadOptions.resumable
         : drive.UploadOptions.defaultOptions;
-    // Carry the local modified time over so "newer wins" compares like with
-    // like, and date sorting matches across devices.
+    // Keep the device's modified date so Drive shows when the document was
+    // actually added, not when it was backed up.
     final metadata = drive.File()
       ..modifiedTime = DateTime.fromMillisecondsSinceEpoch(
         l.modifiedMs,
@@ -446,7 +387,7 @@ class SyncService {
       result = await api.files.create(
         metadata
           ..name = p.posix.basename(path)
-          ..parents = [parentId],
+          ..parents = [parentId!],
         uploadMedia: media,
         uploadOptions: options,
         $fields: 'id, modifiedTime',
@@ -457,62 +398,7 @@ class SyncService {
       localMs: l.modifiedMs,
       remoteMs: result.modifiedTime?.millisecondsSinceEpoch,
     );
-  }
-
-  static Future<void> _download(
-    drive.DriveApi api,
-    Directory root,
-    String path,
-    _RemoteItem r,
-  ) async {
-    final target = _absolute(root, path);
-    _localDirty = true;
-
-    if (r.isDir) {
-      await Directory(target).create(recursive: true);
-      _state.entries[path] = _SyncEntry(r.id, isDir: true);
-      return;
-    }
-
-    // Download to a temp file first so a dropped connection never leaves a
-    // half-written document in the folder.
-    final media =
-        await api.files.get(
-              r.id,
-              downloadOptions: drive.DownloadOptions.fullMedia,
-            )
-            as drive.Media;
-    final temp = File(
-      p.join((await getTemporaryDirectory()).path, 'sync_${r.id}'),
-    );
-    final sink = temp.openWrite();
-    await media.stream.pipe(sink);
-    await Directory(p.dirname(target)).create(recursive: true);
-    final file = await temp.copy(target);
-    await temp.delete();
-    await file.setLastModified(
-      DateTime.fromMillisecondsSinceEpoch(r.modifiedMs),
-    );
-    _state.entries[path] = _SyncEntry(
-      r.id,
-      localMs: (await file.lastModified()).millisecondsSinceEpoch,
-      remoteMs: r.modifiedMs,
-    );
-  }
-
-  static Future<void> _deleteLocal(
-    Directory root,
-    String path,
-    _LocalItem l,
-  ) async {
-    final target = _absolute(root, path);
-    if (l.isDir) {
-      await Directory(target).delete(recursive: true);
-    } else {
-      await File(target).delete();
-    }
-    _state.removeUnder(path);
-    _localDirty = true;
+    return result.id!;
   }
 
   // --- Scanning --------------------------------------------------------------
@@ -552,27 +438,22 @@ class SyncService {
           spaces: 'drive',
         );
         for (final f in page.files ?? const <drive.File>[]) {
-          final name = _safeName(f.name ?? '');
-          final isDir = f.mimeType == _folderMime;
-          // Google Docs/Sheets have no file content to download; skip them.
-          final isNativeDoc =
-              !isDir &&
-              (f.mimeType?.startsWith('application/vnd.google-apps.') ?? false);
-          if (name.isEmpty || name.startsWith('.') || isNativeDoc) continue;
+          final name = f.name ?? '';
+          if (name.isEmpty) continue;
           final path = folderPath == '.'
               ? name
               : p.posix.join(folderPath, name);
-          if (tree.byPath.containsKey(path)) continue; // Duplicate name.
+          final isDir = f.mimeType == _folderMime;
           final item = _RemoteItem(
             id: f.id!,
-            path: path,
+            name: name,
             parentId: folderId,
             isDir: isDir,
             modifiedMs: f.modifiedTime?.millisecondsSinceEpoch ?? 0,
             size: int.tryParse(f.size ?? '') ?? 0,
           );
-          tree.byPath[path] = item;
           tree.byId[item.id] = item;
+          tree.byPath.putIfAbsent(path, () => item);
           if (isDir) pending.add((item.id, path));
         }
         pageToken = page.nextPageToken;
@@ -583,12 +464,6 @@ class SyncService {
 
   // --- Helpers ---------------------------------------------------------------
 
-  /// Whether anything under [path] has never been synced - i.e. was added
-  /// after the last sync and must not be lost with a folder delete.
-  static bool _hasUnsyncedUnder(String path, Iterable<String> keys) => keys.any(
-    (k) => p.posix.isWithin(path, k) && !_state.entries.containsKey(k),
-  );
-
   static List<String> _sortedByDepth(Iterable<String> paths) {
     int depth(String s) => '/'.allMatches(s).length;
     return paths.toList()..sort((a, b) {
@@ -598,7 +473,7 @@ class SyncService {
   }
 
   /// Local paths are stored relative to the DocManager root, always with
-  /// forward slashes, so they match Drive paths.
+  /// forward slashes.
   static String _relative(Directory root, String path) =>
       p.posix.joinAll(p.split(p.relative(path, from: root.path)));
 
@@ -607,9 +482,6 @@ class SyncService {
 
   static bool _isHidden(String key) =>
       p.posix.split(key).any((segment) => segment.startsWith('.'));
-
-  static String _safeName(String name) =>
-      name.trim().replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
 
   static String _describe(Object e) {
     if (e is SocketException) return 'No internet connection';
@@ -644,7 +516,7 @@ class _LocalItem {
 class _RemoteItem {
   const _RemoteItem({
     required this.id,
-    required this.path,
+    required this.name,
     required this.parentId,
     required this.isDir,
     required this.modifiedMs,
@@ -652,7 +524,7 @@ class _RemoteItem {
   });
 
   final String id;
-  final String path;
+  final String name;
   final String parentId;
   final bool isDir;
   final int modifiedMs;
@@ -660,14 +532,10 @@ class _RemoteItem {
 }
 
 class _RemoteTree {
-  final byPath = <String, _RemoteItem>{};
   final byId = <String, _RemoteItem>{};
 
-  String? folderId(String path, String rootId) {
-    if (path == '.') return rootId;
-    final item = byPath[path];
-    return item != null && item.isDir ? item.id : null;
-  }
+  /// First item found at each path; used only to adopt untracked items.
+  final byPath = <String, _RemoteItem>{};
 }
 
 class _SyncEntry {
@@ -678,15 +546,11 @@ class _SyncEntry {
   final int? localMs;
   final int? remoteMs;
 
-  /// Renamed locally; the Drive copy still needs renaming.
-  bool moved = false;
-
   Map<String, dynamic> toJson() => {
     'id': id,
     if (isDir) 'dir': true,
     'l': ?localMs,
     'r': ?remoteMs,
-    if (moved) 'moved': true,
   };
 
   factory _SyncEntry.fromJson(Map<String, dynamic> json) => _SyncEntry(
@@ -694,11 +558,11 @@ class _SyncEntry {
     isDir: json['dir'] == true,
     localMs: json['l'] as int?,
     remoteMs: json['r'] as int?,
-  )..moved = json['moved'] == true;
+  );
 }
 
-/// What the last sync saw, persisted outside the DocManager directory so it
-/// is never synced itself.
+/// What the last sync uploaded, persisted outside the DocManager directory
+/// so it is never synced itself.
 class _SyncState {
   String? account;
   String? rootId;
@@ -714,10 +578,6 @@ class _SyncState {
       }
     }
   }
-
-  void removeUnder(String path) => entries.removeWhere(
-    (key, _) => key == path || p.posix.isWithin(path, key),
-  );
 
   static Future<File> _file() async {
     final dir = await getApplicationSupportDirectory();

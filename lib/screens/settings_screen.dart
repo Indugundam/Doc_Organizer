@@ -48,7 +48,7 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.s7),
-          _SectionHeading('Cloud sync'),
+          _SectionHeading('Cloud backup'),
           const Card(child: _DriveSyncCard()),
           const SizedBox(height: AppSpacing.s7),
           _SectionHeading('General'),
@@ -80,7 +80,7 @@ class SettingsScreen extends StatelessWidget {
             child: ListTile(
               leading: Icon(FluentIcons.info_24_regular),
               title: Text('Doc Manager'),
-              subtitle: Text('Version 1.0.0'),
+              subtitle: Text('Version 1.0.1'),
             ),
           ),
         ],
@@ -178,7 +178,7 @@ class _DriveSyncCard extends StatelessWidget {
               leading: const Icon(FluentIcons.cloud_24_regular),
               title: const Text('Connect Google Drive'),
               subtitle: Text(
-                status.message ?? 'Back up and sync folders across devices',
+                status.message ?? 'Back up your folders to Google Drive',
               ),
               onTap: () => _signIn(context),
             );

@@ -13,7 +13,6 @@ import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
 import '../services/sort_controller.dart';
 import '../services/storage_service.dart';
-import '../services/sync_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../utils/file_type_style.dart';
@@ -44,13 +43,11 @@ class _FolderScreenState extends State<FolderScreen> {
     super.initState();
     _load();
     SortController.order.addListener(_load);
-    SyncService.localChanges.addListener(_load);
   }
 
   @override
   void dispose() {
     SortController.order.removeListener(_load);
-    SyncService.localChanges.removeListener(_load);
     super.dispose();
   }
 
@@ -71,15 +68,6 @@ class _FolderScreenState extends State<FolderScreen> {
   }
 
   Future<void> _load() async {
-    if (!await widget.folder.exists()) {
-      // Deleted or renamed elsewhere (e.g. by Drive sync); close this screen.
-      if (!mounted) return;
-      final route = ModalRoute.of(context);
-      if (route != null && route.isActive) {
-        Navigator.removeRoute(context, route);
-      }
-      return;
-    }
     final folders = await StorageService.listSubfolders(widget.folder);
     final docs = await StorageService.listDocuments(widget.folder);
     if (!mounted) return;

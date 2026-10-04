@@ -6,7 +6,6 @@ import 'package:path/path.dart' as p;
 
 import '../services/sort_controller.dart';
 import '../services/storage_service.dart';
-import '../services/sync_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/app_dialogs.dart';
@@ -32,13 +31,11 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _load();
     SortController.order.addListener(_load);
-    SyncService.localChanges.addListener(_load);
   }
 
   @override
   void dispose() {
     SortController.order.removeListener(_load);
-    SyncService.localChanges.removeListener(_load);
     super.dispose();
   }
 
