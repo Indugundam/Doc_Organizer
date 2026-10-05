@@ -161,6 +161,49 @@ class StorageService {
     return renamed;
   }
 
+  /// Moves [file] into [target]. If a document with the same name is already
+  /// there, the moved one becomes "name (2).ext", "name (3).ext", ...
+  static Future<File> moveDocument(File file, Directory target) async {
+    if (p.equals(p.dirname(file.path), target.path)) return file;
+    final name = p.basename(file.path);
+    final base = p.basenameWithoutExtension(name);
+    final ext = p.extension(name);
+    var destPath = p.join(target.path, name);
+    for (var n = 2; await File(destPath).exists(); n++) {
+      destPath = p.join(target.path, '$base ($n)$ext');
+    }
+    final moved = await file.rename(destPath);
+    // Same file, new place: Drive moves its copy and search keeps its text.
+    await SyncService.recordLocalMove(file.path, destPath);
+    await SearchIndex.recordMove(file.path, destPath);
+    SyncService.requestSync();
+    return moved;
+  }
+
+  /// Every folder and subfolder, in tree order (each folder followed by its
+  /// subfolders), for choosing where to move documents.
+  static Future<List<Directory>> listAllFolders() async {
+    final root = await rootDir();
+    final folders = <Directory>[];
+    await for (final entity in root.list(recursive: true, followLinks: false)) {
+      if (entity is Directory && !p.basename(entity.path).startsWith('.')) {
+        folders.add(entity);
+      }
+    }
+    List<String> segments(Directory d) =>
+        p.split(p.relative(d.path, from: root.path));
+    folders.sort((a, b) {
+      final sa = segments(a);
+      final sb = segments(b);
+      for (var i = 0; i < sa.length && i < sb.length; i++) {
+        final c = sa[i].toLowerCase().compareTo(sb[i].toLowerCase());
+        if (c != 0) return c;
+      }
+      return sa.length.compareTo(sb.length);
+    });
+    return folders;
+  }
+
   static Future<void> deleteDocument(File file) async {
     if (await file.exists()) {
       await file.delete();

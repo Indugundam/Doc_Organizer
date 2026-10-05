@@ -18,6 +18,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/document_thumbnail.dart';
+import '../widgets/folder_picker_sheet.dart';
 import '../widgets/folder_tile.dart';
 import '../widgets/searchable_app_bar.dart';
 import '../widgets/settings_action.dart';
@@ -37,6 +38,12 @@ class _FolderScreenState extends State<FolderScreen> {
   List<File> _documents = [];
   bool _loading = true;
   String _query = '';
+
+  /// Paths of documents picked in multi-select mode (entered by
+  /// long-pressing a document). Empty when not selecting.
+  final Set<String> _selected = {};
+
+  bool get _selecting => _selected.isNotEmpty;
 
   @override
   void initState() {
@@ -80,6 +87,9 @@ class _FolderScreenState extends State<FolderScreen> {
       _subfolders = folders;
       _documents = docs;
       _loading = false;
+      // Drop selections for documents that no longer exist here.
+      final paths = docs.map((d) => d.path).toSet();
+      _selected.retainAll(paths);
     });
   }
 
@@ -372,17 +382,115 @@ class _FolderScreenState extends State<FolderScreen> {
 
   // --- Documents -----------------------------------------------------------
 
-  Future<void> _shareDocument(File file) async {
+  Future<void> _shareDocuments(List<File> files) async {
     try {
       await SharePlus.instance.share(
         ShareParams(
-          files: [XFile(file.path)],
-          fileNameOverrides: [p.basename(file.path)],
+          files: [for (final f in files) XFile(f.path)],
+          fileNameOverrides: [for (final f in files) p.basename(f.path)],
         ),
       );
     } catch (e) {
       _showError(e);
     }
+  }
+
+  Future<void> _moveDocuments(List<File> files) async {
+    final target = await showFolderPicker(
+      context,
+      title: files.length == 1
+          ? 'Move to folder'
+          : 'Move ${files.length} documents to folder',
+      current: widget.folder,
+    );
+    if (target == null) return;
+    var moved = 0;
+    try {
+      for (final file in files) {
+        await StorageService.moveDocument(file, target);
+        moved++;
+      }
+      _showMessage(
+        'Moved ${moved == 1 ? 'document' : '$moved documents'} '
+        'to "${p.basename(target.path)}"',
+      );
+    } catch (e) {
+      _showError(e);
+    }
+    _clearSelection();
+    await _load();
+  }
+
+  Future<void> _deleteDocuments(List<File> files) async {
+    final confirmed = await AppDialogs.confirmDelete(
+      context,
+      title: 'Delete ${files.length} documents?',
+      message: 'The selected documents will be permanently deleted.',
+    );
+    if (confirmed != true) return;
+    for (final file in files) {
+      await StorageService.deleteDocument(file);
+    }
+    _clearSelection();
+    await _load();
+  }
+
+  // --- Multi-select ----------------------------------------------------------
+
+  List<File> get _selectedDocuments =>
+      _documents.where((d) => _selected.contains(d.path)).toList();
+
+  void _toggleSelected(File file) {
+    setState(() {
+      if (!_selected.remove(file.path)) _selected.add(file.path);
+    });
+  }
+
+  void _clearSelection() {
+    if (_selected.isEmpty || !mounted) return;
+    setState(_selected.clear);
+  }
+
+  void _selectAllVisible() {
+    setState(() => _selected.addAll(_filteredDocuments.map((d) => d.path)));
+  }
+
+  PreferredSizeWidget _buildSelectionBar() {
+    final files = _selectedDocuments;
+    final allSelected = _filteredDocuments.every(
+      (d) => _selected.contains(d.path),
+    );
+    return AppBar(
+      leading: IconButton(
+        tooltip: 'Cancel',
+        icon: const Icon(FluentIcons.dismiss_24_regular),
+        onPressed: _clearSelection,
+      ),
+      title: Text('${files.length} selected'),
+      actions: [
+        if (!allSelected)
+          IconButton(
+            tooltip: 'Select all',
+            icon: const Icon(FluentIcons.select_all_on_24_regular),
+            onPressed: _selectAllVisible,
+          ),
+        IconButton(
+          tooltip: 'Move',
+          icon: const Icon(FluentIcons.folder_arrow_right_24_regular),
+          onPressed: () => _moveDocuments(files),
+        ),
+        IconButton(
+          tooltip: 'Share',
+          icon: const Icon(FluentIcons.share_24_regular),
+          onPressed: () => _shareDocuments(files),
+        ),
+        IconButton(
+          tooltip: 'Delete',
+          icon: const Icon(FluentIcons.delete_24_regular),
+          onPressed: () => _deleteDocuments(files),
+        ),
+      ],
+    );
   }
 
   Future<void> _downloadDocument(File file) async {
@@ -438,6 +546,11 @@ class _FolderScreenState extends State<FolderScreen> {
           label: 'Rename',
         ),
         const AppSheetAction(
+          id: 'move',
+          icon: FluentIcons.folder_arrow_right_24_regular,
+          label: 'Move',
+        ),
+        const AppSheetAction(
           id: 'share',
           icon: FluentIcons.share_24_regular,
           label: 'Share',
@@ -458,8 +571,10 @@ class _FolderScreenState extends State<FolderScreen> {
     switch (choice) {
       case 'rename':
         await _renameDocument(file);
+      case 'move':
+        await _moveDocuments([file]);
       case 'share':
-        await _shareDocument(file);
+        await _shareDocuments([file]);
       case 'download':
         await _downloadDocument(file);
       case 'delete':
@@ -474,116 +589,150 @@ class _FolderScreenState extends State<FolderScreen> {
     final documents = _filteredDocuments;
     final noMatches =
         _query.isNotEmpty && subfolders.isEmpty && documents.isEmpty;
-    return Scaffold(
-      appBar: SearchableAppBar(
-        title: p.basename(widget.folder.path),
-        hintText: 'Search this folder',
-        onQueryChanged: (q) => setState(() => _query = q),
-        actions: [settingsAction(context)],
+    // Back exits multi-select instead of leaving the folder.
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _clearSelection();
+      },
+      child: Scaffold(
+        appBar: PreferredSize(
+          preferredSize: const Size.fromHeight(kToolbarHeight),
+          // IndexedStack keeps the search bar (and any typed query) alive
+          // while the selection bar is showing.
+          child: IndexedStack(
+            index: _selecting ? 1 : 0,
+            children: [
+              SearchableAppBar(
+                title: p.basename(widget.folder.path),
+                hintText: 'Search this folder',
+                onQueryChanged: (q) => setState(() => _query = q),
+                actions: [settingsAction(context)],
+              ),
+              _buildSelectionBar(),
+            ],
+          ),
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : isEmpty
+            ? _EmptyState(onAdd: _openAddMenu)
+            : noMatches
+            ? const _NoResults()
+            : CustomScrollView(
+                slivers: [
+                  if (subfolders.isNotEmpty) ...[
+                    const SliverPadding(
+                      padding: EdgeInsets.fromLTRB(
+                        AppSpacing.s5,
+                        AppSpacing.s5,
+                        AppSpacing.s5,
+                        AppSpacing.s2,
+                      ),
+                      sliver: SliverToBoxAdapter(
+                        child: _SectionLabel('Folders'),
+                      ),
+                    ),
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.s5,
+                      ),
+                      sliver: SliverGrid(
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2,
+                              crossAxisSpacing: AppSpacing.s4,
+                              mainAxisSpacing: AppSpacing.s4,
+                              childAspectRatio: 1.05,
+                            ),
+                        delegate: SliverChildBuilderDelegate((context, index) {
+                          final folder = subfolders[index];
+                          // Folders are dimmed and inert while selecting
+                          // documents.
+                          return IgnorePointer(
+                            ignoring: _selecting,
+                            child: AnimatedOpacity(
+                              opacity: _selecting ? 0.4 : 1,
+                              duration: const Duration(milliseconds: 150),
+                              child: FolderTile(
+                                folder: folder,
+                                onTap: () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          FolderScreen(folder: folder),
+                                    ),
+                                  );
+                                  await _load();
+                                },
+                                onMore: () => _openFolderMenu(folder),
+                              ),
+                            ),
+                          );
+                        }, childCount: subfolders.length),
+                      ),
+                    ),
+                  ],
+                  if (documents.isNotEmpty) ...[
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.s5,
+                        AppSpacing.s5,
+                        AppSpacing.s5,
+                        AppSpacing.s2,
+                      ),
+                      sliver: SliverToBoxAdapter(
+                        child: _SectionLabel('Documents'),
+                      ),
+                    ),
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.s5,
+                        0,
+                        AppSpacing.s5,
+                        AppSpacing.s5,
+                      ),
+                      sliver: SliverGrid(
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              crossAxisSpacing: AppSpacing.s3,
+                              mainAxisSpacing: AppSpacing.s3,
+                            ),
+                        delegate: SliverChildBuilderDelegate((context, index) {
+                          final file = documents[index];
+                          return _DocumentTile(
+                            file: file,
+                            selecting: _selecting,
+                            selected: _selected.contains(file.path),
+                            onTap: () async {
+                              if (_selecting) return _toggleSelected(file);
+                              final deleted = await Navigator.push<bool>(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      DocumentViewerScreen(file: file),
+                                ),
+                              );
+                              if (deleted == true) await _load();
+                            },
+                            onLongPress: () => _toggleSelected(file),
+                            onMore: () => _openDocumentMenu(file),
+                          );
+                        }, childCount: documents.length),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+        floatingActionButton: isEmpty || _selecting
+            ? null
+            : FloatingActionButton(
+                onPressed: _openAddMenu,
+                child: const Icon(FluentIcons.add_24_regular),
+              ),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : isEmpty
-          ? _EmptyState(onAdd: _openAddMenu)
-          : noMatches
-          ? const _NoResults()
-          : CustomScrollView(
-              slivers: [
-                if (subfolders.isNotEmpty) ...[
-                  const SliverPadding(
-                    padding: EdgeInsets.fromLTRB(
-                      AppSpacing.s5,
-                      AppSpacing.s5,
-                      AppSpacing.s5,
-                      AppSpacing.s2,
-                    ),
-                    sliver: SliverToBoxAdapter(child: _SectionLabel('Folders')),
-                  ),
-                  SliverPadding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.s5,
-                    ),
-                    sliver: SliverGrid(
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            crossAxisSpacing: AppSpacing.s4,
-                            mainAxisSpacing: AppSpacing.s4,
-                            childAspectRatio: 1.05,
-                          ),
-                      delegate: SliverChildBuilderDelegate((context, index) {
-                        final folder = subfolders[index];
-                        return FolderTile(
-                          folder: folder,
-                          onTap: () async {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => FolderScreen(folder: folder),
-                              ),
-                            );
-                            await _load();
-                          },
-                          onMore: () => _openFolderMenu(folder),
-                        );
-                      }, childCount: subfolders.length),
-                    ),
-                  ),
-                ],
-                if (documents.isNotEmpty) ...[
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.s5,
-                      AppSpacing.s5,
-                      AppSpacing.s5,
-                      AppSpacing.s2,
-                    ),
-                    sliver: SliverToBoxAdapter(
-                      child: _SectionLabel('Documents'),
-                    ),
-                  ),
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.s5,
-                      0,
-                      AppSpacing.s5,
-                      AppSpacing.s5,
-                    ),
-                    sliver: SliverGrid(
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 3,
-                            crossAxisSpacing: AppSpacing.s3,
-                            mainAxisSpacing: AppSpacing.s3,
-                          ),
-                      delegate: SliverChildBuilderDelegate((context, index) {
-                        final file = documents[index];
-                        return _DocumentTile(
-                          file: file,
-                          onTap: () async {
-                            final deleted = await Navigator.push<bool>(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) =>
-                                    DocumentViewerScreen(file: file),
-                              ),
-                            );
-                            if (deleted == true) await _load();
-                          },
-                          onMore: () => _openDocumentMenu(file),
-                        );
-                      }, childCount: documents.length),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-      floatingActionButton: isEmpty
-          ? null
-          : FloatingActionButton(
-              onPressed: _openAddMenu,
-              child: const Icon(FluentIcons.add_24_regular),
-            ),
     );
   }
 }
@@ -671,49 +820,87 @@ class _EmptyState extends StatelessWidget {
 class _DocumentTile extends StatelessWidget {
   const _DocumentTile({
     required this.file,
+    required this.selecting,
+    required this.selected,
     required this.onTap,
+    required this.onLongPress,
     required this.onMore,
   });
 
   final File file;
+
+  /// Multi-select mode is on: taps toggle selection and the menu button is
+  /// replaced by a selection indicator.
+  final bool selecting;
+  final bool selected;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
   final VoidCallback onMore;
 
   @override
   Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppSpacing.s3),
       child: Material(
         color: Theme.of(context).colorScheme.surface,
         child: InkWell(
           onTap: onTap,
-          onLongPress: onMore,
+          onLongPress: onLongPress,
           child: Container(
             decoration: BoxDecoration(
               border: Border.all(color: Theme.of(context).colorScheme.outline),
               borderRadius: BorderRadius.circular(AppSpacing.s3),
             ),
+            foregroundDecoration: selected
+                ? BoxDecoration(
+                    color: primary.withValues(alpha: 0.18),
+                    border: Border.all(color: primary, width: 3),
+                    borderRadius: BorderRadius.circular(AppSpacing.s3),
+                  )
+                : null,
             child: Stack(
               fit: StackFit.expand,
               children: [
                 DocumentThumbnail(file: file),
-                Positioned(
-                  right: 0,
-                  top: 0,
-                  child: IconButton(
-                    onPressed: onMore,
-                    icon: const Icon(
-                      FluentIcons.more_vertical_24_regular,
-                      size: 16,
+                if (selecting)
+                  Positioned(
+                    right: AppSpacing.s2,
+                    top: AppSpacing.s2,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: selected
+                            ? Colors.white
+                            : Colors.black.withValues(alpha: 0.25),
+                      ),
+                      child: Icon(
+                        selected
+                            ? FluentIcons.checkmark_circle_24_filled
+                            : FluentIcons.circle_24_regular,
+                        size: 22,
+                        color: selected ? primary : Colors.white,
+                      ),
                     ),
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 28,
-                      minHeight: 28,
+                  )
+                else
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    child: IconButton(
+                      onPressed: onMore,
+                      icon: const Icon(
+                        FluentIcons.more_vertical_24_regular,
+                        size: 16,
+                      ),
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
                     ),
                   ),
-                ),
                 Positioned(
                   left: 0,
                   right: 0,
