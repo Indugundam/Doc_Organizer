@@ -1,7 +1,10 @@
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
+import '../services/app_lock_controller.dart';
 import '../services/sort_controller.dart';
+import '../services/sync_service.dart';
 import '../theme/app_spacing.dart';
 import '../theme/theme_controller.dart';
 
@@ -46,6 +49,12 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.s7),
+          _SectionHeading('Privacy'),
+          const Card(child: _PrivacyCard()),
+          const SizedBox(height: AppSpacing.s7),
+          _SectionHeading('Cloud backup'),
+          const Card(child: _DriveSyncCard()),
+          const SizedBox(height: AppSpacing.s7),
           _SectionHeading('General'),
           Card(
             child: ValueListenableBuilder<SortOrder>(
@@ -75,7 +84,7 @@ class SettingsScreen extends StatelessWidget {
             child: ListTile(
               leading: Icon(FluentIcons.info_24_regular),
               title: Text('Doc Manager'),
-              subtitle: Text('Version 1.0.0'),
+              subtitle: Text('Version 1.0.2'),
             ),
           ),
         ],
@@ -123,6 +132,153 @@ class _SelectableOption extends StatelessWidget {
             )
           : null,
       onTap: onTap,
+    );
+  }
+}
+
+class _DriveSyncCard extends StatelessWidget {
+  const _DriveSyncCard();
+
+  Future<void> _signIn(BuildContext context) async {
+    try {
+      await SyncService.signIn();
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) return;
+      if (context.mounted) _showError(context, e.description ?? e.code.name);
+    } catch (e) {
+      if (context.mounted) _showError(context, e.toString());
+    }
+  }
+
+  void _showError(BuildContext context, String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  static String _lastSyncedLabel(DateTime? time) {
+    if (time == null) return 'Not synced yet';
+    final ago = DateTime.now().difference(time);
+    if (ago.inMinutes < 1) return 'Synced just now';
+    if (ago.inHours < 1) return 'Synced ${ago.inMinutes} min ago';
+    if (ago.inDays < 1) return 'Synced ${ago.inHours} h ago';
+    return 'Synced ${time.day}/${time.month}/${time.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<SyncStatus>(
+      valueListenable: SyncService.status,
+      builder: (context, status, _) {
+        switch (status.phase) {
+          case SyncPhase.notConfigured:
+            return const ListTile(
+              leading: Icon(FluentIcons.cloud_off_24_regular),
+              title: Text('Google Drive sync'),
+              subtitle: Text('Not available in this build'),
+            );
+          case SyncPhase.signedOut:
+            return ListTile(
+              leading: const Icon(FluentIcons.cloud_24_regular),
+              title: const Text('Connect Google Drive'),
+              subtitle: Text(
+                status.message ?? 'Back up your folders to Google Drive',
+              ),
+              onTap: () => _signIn(context),
+            );
+          case SyncPhase.idle:
+          case SyncPhase.syncing:
+          case SyncPhase.error:
+            final syncing = status.phase == SyncPhase.syncing;
+            final error = status.phase == SyncPhase.error;
+            final colors = Theme.of(context).colorScheme;
+            return Column(
+              children: [
+                ListTile(
+                  leading: Icon(
+                    error
+                        ? FluentIcons.cloud_dismiss_24_regular
+                        : syncing
+                        ? FluentIcons.cloud_sync_24_regular
+                        : FluentIcons.cloud_checkmark_24_regular,
+                    color: error ? colors.error : null,
+                  ),
+                  title: Text(status.email ?? 'Google Drive'),
+                  subtitle: Text(
+                    syncing
+                        ? 'Syncing…'
+                        : error
+                        ? status.message ?? 'Sync failed'
+                        : _lastSyncedLabel(status.lastSynced),
+                  ),
+                  trailing: syncing
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : IconButton(
+                          tooltip: 'Sync now',
+                          icon: const Icon(FluentIcons.arrow_sync_24_regular),
+                          onPressed: SyncService.syncNow,
+                        ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(FluentIcons.sign_out_24_regular),
+                  title: const Text('Disconnect'),
+                  subtitle: const Text(
+                    'Files stay on this device and in Drive',
+                  ),
+                  onTap: SyncService.signOut,
+                ),
+              ],
+            );
+        }
+      },
+    );
+  }
+}
+
+class _PrivacyCard extends StatelessWidget {
+  const _PrivacyCard();
+
+  Future<void> _toggleLock(BuildContext context, bool enabled) async {
+    final error = await AppLockController.setLockEnabled(enabled);
+    if (error != null && context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        ValueListenableBuilder<bool>(
+          valueListenable: AppLockController.lockEnabled,
+          builder: (context, enabled, _) => SwitchListTile(
+            secondary: const Icon(FluentIcons.lock_closed_24_regular),
+            title: const Text('App lock'),
+            subtitle: const Text(
+              'Unlock with fingerprint, face or device PIN',
+            ),
+            value: enabled,
+            onChanged: (value) => _toggleLock(context, value),
+          ),
+        ),
+        const Divider(height: 1),
+        ValueListenableBuilder<bool>(
+          valueListenable: AppLockController.hideInRecents,
+          builder: (context, hide, _) => SwitchListTile(
+            secondary: const Icon(FluentIcons.eye_off_24_regular),
+            title: const Text('Hide in recent apps'),
+            subtitle: const Text('Hide the app preview in the app switcher'),
+            value: hide,
+            onChanged: AppLockController.setHideInRecents,
+          ),
+        ),
+      ],
     );
   }
 }

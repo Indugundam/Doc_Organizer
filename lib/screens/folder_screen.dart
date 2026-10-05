@@ -393,6 +393,24 @@ class _FolderScreenState extends State<FolderScreen> {
     }
   }
 
+  Future<void> _renameDocument(File file) async {
+    final current = p.basenameWithoutExtension(file.path);
+    final name = await AppDialogs.promptForName(
+      context,
+      title: 'Rename document',
+      icon: FluentIcons.rename_24_regular,
+      initial: current,
+      confirmLabel: 'Save',
+    );
+    if (name == null || name.trim().isEmpty || name == current) return;
+    try {
+      await StorageService.renameDocument(file, name);
+      await _load();
+    } catch (e) {
+      _showError(e);
+    }
+  }
+
   Future<void> _deleteDocument(File file) async {
     final confirmed = await AppDialogs.confirmDelete(
       context,
@@ -409,6 +427,11 @@ class _FolderScreenState extends State<FolderScreen> {
     final choice = await AppDialogs.showActionSheet(
       context,
       actions: [
+        const AppSheetAction(
+          id: 'rename',
+          icon: FluentIcons.rename_24_regular,
+          label: 'Rename',
+        ),
         const AppSheetAction(
           id: 'share',
           icon: FluentIcons.share_24_regular,
@@ -428,6 +451,8 @@ class _FolderScreenState extends State<FolderScreen> {
       ],
     );
     switch (choice) {
+      case 'rename':
+        await _renameDocument(file);
       case 'share':
         await _shareDocument(file);
       case 'download':
@@ -621,7 +646,7 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: AppSpacing.s2),
             Text(
-              'Scan a document, add a photo or video, import\na file, or create a subfolder to get started.',
+              'Scan a document, add a photo or video, import a file, or create a subfolder to get started.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium,
             ),

@@ -43,3 +43,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
+
+# Google OAuth client IDs for Drive sync (see config/google_oauth.example.json
+# and ios/Flutter/Secrets.example.xcconfig)
+/config/google_oauth.json
+/ios/Flutter/Secrets.xcconfig
+
+# Firebase / Google service files, in case they are ever added
+google-services.json
+GoogleService-Info.plist
