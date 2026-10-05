@@ -12,15 +12,15 @@ import 'package:share_plus/share_plus.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
 import '../services/sort_controller.dart';
+import '../services/search_index.dart';
 import '../services/storage_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
-import '../utils/file_type_style.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/document_thumbnail.dart';
 import '../widgets/folder_tile.dart';
 import '../widgets/searchable_app_bar.dart';
 import '../widgets/settings_action.dart';
-import '../widgets/video_thumbnail_preview.dart';
 import 'document_viewer_screen.dart';
 
 class FolderScreen extends StatefulWidget {
@@ -43,11 +43,13 @@ class _FolderScreenState extends State<FolderScreen> {
     super.initState();
     _load();
     SortController.order.addListener(_load);
+    SearchIndex.revision.addListener(_onIndexChanged);
   }
 
   @override
   void dispose() {
     SortController.order.removeListener(_load);
+    SearchIndex.revision.removeListener(_onIndexChanged);
     super.dispose();
   }
 
@@ -59,12 +61,15 @@ class _FolderScreenState extends State<FolderScreen> {
         .toList();
   }
 
+  /// Matches file names and the text inside documents (see [SearchIndex]).
   List<File> get _filteredDocuments {
     if (_query.isEmpty) return _documents;
-    final query = _query.toLowerCase();
-    return _documents
-        .where((f) => p.basename(f.path).toLowerCase().contains(query))
-        .toList();
+    return _documents.where((f) => SearchIndex.matches(f, _query)).toList();
+  }
+
+  /// More document text became searchable; refresh any active search.
+  void _onIndexChanged() {
+    if (_query.isNotEmpty && mounted) setState(() {});
   }
 
   Future<void> _load() async {
@@ -676,8 +681,6 @@ class _DocumentTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isImage = StorageService.isImage(file);
-    final isVideo = StorageService.isVideo(file);
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppSpacing.s3),
       child: Material(
@@ -693,22 +696,7 @@ class _DocumentTile extends StatelessWidget {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                if (isImage)
-                  Image.file(file, fit: BoxFit.cover)
-                else if (isVideo)
-                  VideoThumbnailPreview(file: file)
-                else
-                  Builder(
-                    builder: (context) {
-                      final style = fileTypeStyleFor(file);
-                      return Container(
-                        color: style.background,
-                        child: Center(
-                          child: Icon(style.icon, size: 36, color: style.color),
-                        ),
-                      );
-                    },
-                  ),
+                DocumentThumbnail(file: file),
                 Positioned(
                   right: 0,
                   top: 0,

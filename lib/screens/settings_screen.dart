@@ -84,7 +84,7 @@ class SettingsScreen extends StatelessWidget {
             child: ListTile(
               leading: Icon(FluentIcons.info_24_regular),
               title: Text('Doc Manager'),
-              subtitle: Text('Version 1.0.2'),
+              subtitle: Text('Version 1.0.3'),
             ),
           ),
         ],

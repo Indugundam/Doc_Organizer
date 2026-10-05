@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'search_index.dart';
 import 'sort_controller.dart';
 import 'sync_service.dart';
 
@@ -26,6 +27,10 @@ class StorageService {
     _root = root;
     return root;
   }
+
+  /// The root directory if [rootDir] has already resolved it, for callers
+  /// that need it synchronously (e.g. while building search results).
+  static Directory? get cachedRootDir => _root;
 
   static Future<List<Directory>> listFolders() async {
     final root = await rootDir();
@@ -62,17 +67,32 @@ class StorageService {
     }
     await folder.rename(newPath);
     await SyncService.recordLocalMove(folder.path, newPath);
+    await SearchIndex.recordMove(folder.path, newPath);
     SyncService.requestSync();
   }
 
   static Future<void> deleteFolder(Directory folder) async {
     await folder.delete(recursive: true);
     SyncService.requestSync();
+    SearchIndex.scheduleUpdate();
   }
 
   static Future<List<File>> listDocuments(Directory folder) async {
     final entries = await folder.list().toList();
     final files = entries.whereType<File>().toList();
+    _sortEntries(files);
+    return files;
+  }
+
+  /// Every document in every folder, for searching across the whole app.
+  static Future<List<File>> listAllDocuments() async {
+    final root = await rootDir();
+    final files = <File>[];
+    await for (final entity in root.list(recursive: true, followLinks: false)) {
+      if (entity is File && !p.basename(entity.path).startsWith('.')) {
+        files.add(entity);
+      }
+    }
     _sortEntries(files);
     return files;
   }
@@ -102,6 +122,7 @@ class StorageService {
     final destPath = p.join(folder.path, '${_sanitize(base)}_$stamp$ext');
     final copied = await File(sourcePath).copy(destPath);
     SyncService.requestSync();
+    SearchIndex.scheduleUpdate();
     return copied;
   }
 
@@ -121,6 +142,7 @@ class StorageService {
     }
     final written = await File(destPath).writeAsBytes(bytes);
     SyncService.requestSync();
+    SearchIndex.scheduleUpdate();
     return written;
   }
 
@@ -134,6 +156,7 @@ class StorageService {
     }
     final renamed = await file.rename(newPath);
     await SyncService.recordLocalMove(file.path, newPath);
+    await SearchIndex.recordMove(file.path, newPath);
     SyncService.requestSync();
     return renamed;
   }
@@ -142,6 +165,7 @@ class StorageService {
     if (await file.exists()) {
       await file.delete();
       SyncService.requestSync();
+      SearchIndex.scheduleUpdate();
     }
   }
 

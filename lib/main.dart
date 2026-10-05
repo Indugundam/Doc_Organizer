@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import 'screens/home_screen.dart';
 import 'services/app_lock_controller.dart';
+import 'services/search_index.dart';
 import 'services/sort_controller.dart';
 import 'services/sync_service.dart';
 import 'theme/app_theme.dart';
@@ -13,6 +15,11 @@ void main() async {
   await ThemeController.load();
   await SortController.load();
   await AppLockController.load();
+  // PDF thumbnails and text extraction use pdfrx's engine directly.
+  await pdfrxFlutterInitialize();
+  // Not awaited: loads the text index, then reads new documents in the
+  // background.
+  SearchIndex.load();
   // Not awaited: signing in silently and the first sync run in the background.
   SyncService.init();
   runApp(const DocManagerApp());

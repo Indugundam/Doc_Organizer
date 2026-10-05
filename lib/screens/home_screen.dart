@@ -4,14 +4,17 @@ import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../services/search_index.dart';
 import '../services/sort_controller.dart';
 import '../services/storage_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/document_thumbnail.dart';
 import '../widgets/folder_tile.dart';
 import '../widgets/searchable_app_bar.dart';
 import '../widgets/settings_action.dart';
+import 'document_viewer_screen.dart';
 import 'folder_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -23,6 +26,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<Directory> _folders = [];
+  List<File> _allDocuments = [];
   bool _loading = true;
   String _query = '';
 
@@ -31,11 +35,13 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _load();
     SortController.order.addListener(_load);
+    SearchIndex.revision.addListener(_onIndexChanged);
   }
 
   @override
   void dispose() {
     SortController.order.removeListener(_load);
+    SearchIndex.revision.removeListener(_onIndexChanged);
     super.dispose();
   }
 
@@ -47,13 +53,41 @@ class _HomeScreenState extends State<HomeScreen> {
         .toList();
   }
 
+  /// Documents in any folder whose name or text matches the search.
+  List<File> get _matchingDocuments {
+    if (_query.trim().isEmpty) return const [];
+    return _allDocuments.where((f) => SearchIndex.matches(f, _query)).toList();
+  }
+
+  /// More document text became searchable; refresh any active search.
+  void _onIndexChanged() {
+    if (_query.isNotEmpty && mounted) setState(() {});
+  }
+
   Future<void> _load() async {
     final folders = await StorageService.listFolders();
+    final documents = await StorageService.listAllDocuments();
     if (!mounted) return;
     setState(() {
       _folders = folders;
+      _allDocuments = documents;
       _loading = false;
     });
+  }
+
+  void _onQueryChanged(String query) {
+    final starting = _query.isEmpty && query.isNotEmpty;
+    setState(() => _query = query);
+    // Pick up documents added inside folders since the last load.
+    if (starting) _load();
+  }
+
+  Future<void> _openDocument(File file) async {
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => DocumentViewerScreen(file: file)),
+    );
+    await _load();
   }
 
   void _showError(Object e) {
@@ -130,22 +164,42 @@ class _HomeScreenState extends State<HomeScreen> {
     if (choice == 'delete') await _deleteFolder(folder);
   }
 
+  Widget _buildFolderTile(Directory folder) {
+    return FolderTile(
+      folder: folder,
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => FolderScreen(folder: folder)),
+        );
+        await _load();
+      },
+      onMore: () => _openFolderMenu(folder),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final folders = _filteredFolders;
     return Scaffold(
       appBar: SearchableAppBar(
         title: 'Doc Manager',
-        hintText: 'Search folders',
-        onQueryChanged: (q) => setState(() => _query = q),
+        hintText: 'Search folders and documents',
+        onQueryChanged: _onQueryChanged,
         actions: [settingsAction(context)],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _folders.isEmpty
           ? _EmptyState(onCreateFolder: _createFolder)
-          : folders.isEmpty
-          ? const _NoResults()
+          : _query.trim().isNotEmpty
+          ? _SearchResults(
+              query: _query,
+              folders: folders,
+              documents: _matchingDocuments,
+              buildFolder: _buildFolderTile,
+              onOpenDocument: _openDocument,
+            )
           : GridView.builder(
               padding: const EdgeInsets.all(AppSpacing.s5),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -155,22 +209,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 childAspectRatio: 1.05,
               ),
               itemCount: folders.length,
-              itemBuilder: (context, index) {
-                final folder = folders[index];
-                return FolderTile(
-                  folder: folder,
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => FolderScreen(folder: folder),
-                      ),
-                    );
-                    await _load();
-                  },
-                  onMore: () => _openFolderMenu(folder),
-                );
-              },
+              itemBuilder: (context, index) => _buildFolderTile(folders[index]),
             ),
       floatingActionButton: _folders.isEmpty
           ? null
@@ -179,6 +218,145 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: const Icon(FluentIcons.folder_add_24_regular),
               label: const Text('New folder'),
             ),
+    );
+  }
+}
+
+/// Search results across the whole app: matching folders, then matching
+/// documents from any folder with an excerpt of where the text matched.
+class _SearchResults extends StatelessWidget {
+  const _SearchResults({
+    required this.query,
+    required this.folders,
+    required this.documents,
+    required this.buildFolder,
+    required this.onOpenDocument,
+  });
+
+  final String query;
+  final List<Directory> folders;
+  final List<File> documents;
+  final Widget Function(Directory folder) buildFolder;
+  final ValueChanged<File> onOpenDocument;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final root = StorageService.cachedRootDir;
+    return CustomScrollView(
+      slivers: [
+        // While documents are still being read, say so - otherwise a
+        // missing result looks like a bug.
+        ValueListenableBuilder<int>(
+          valueListenable: SearchIndex.pending,
+          builder: (context, pending, _) => SliverToBoxAdapter(
+            child: pending == 0
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.s5,
+                      AppSpacing.s4,
+                      AppSpacing.s5,
+                      0,
+                    ),
+                    child: Text(
+                      'Reading text from $pending '
+                      '${pending == 1 ? 'document' : 'documents'}…',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+        if (folders.isEmpty && documents.isEmpty)
+          const SliverFillRemaining(
+            hasScrollBody: false,
+            child: _NoResults(),
+          ),
+        if (folders.isNotEmpty) ...[
+          const _ResultsHeading('Folders'),
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.s5),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: AppSpacing.s4,
+                mainAxisSpacing: AppSpacing.s4,
+                childAspectRatio: 1.05,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => buildFolder(folders[index]),
+                childCount: folders.length,
+              ),
+            ),
+          ),
+        ],
+        if (documents.isNotEmpty) ...[
+          const _ResultsHeading('Documents'),
+          SliverList.builder(
+            itemCount: documents.length,
+            itemBuilder: (context, index) {
+              final file = documents[index];
+              final snippet = SearchIndex.snippet(file, query);
+              final folderPath = root == null
+                  ? ''
+                  : p.relative(p.dirname(file.path), from: root.path);
+              return ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.s5,
+                  vertical: AppSpacing.s1,
+                ),
+                leading: ClipRRect(
+                  borderRadius: BorderRadius.circular(AppSpacing.s2),
+                  child: SizedBox.square(
+                    dimension: 48,
+                    child: DocumentThumbnail(file: file),
+                  ),
+                ),
+                title: Text(
+                  p.basename(file.path),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  snippet ?? folderPath,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () => onOpenDocument(file),
+              );
+            },
+          ),
+          const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.s7)),
+        ],
+      ],
+    );
+  }
+}
+
+class _ResultsHeading extends StatelessWidget {
+  const _ResultsHeading(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.s5,
+        AppSpacing.s5,
+        AppSpacing.s5,
+        AppSpacing.s2,
+      ),
+      sliver: SliverToBoxAdapter(
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
     );
   }
 }
