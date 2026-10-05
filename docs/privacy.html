@@ -73,6 +73,37 @@
     Uninstalling the app deletes this local data.
   </p>
 
+  <h2>Search inside documents</h2>
+  <p>
+    So you can search by what is written in a document, the app reads the
+    text in your photos, scans and PDFs. This happens
+    <strong>entirely on your device</strong>, using Google ML Kit's on-device
+    text recognition. The text it finds is stored only in the app's private
+    storage on your phone. It is never uploaded to Google Drive, to us, or
+    anywhere else.
+  </p>
+  <p>
+    ML Kit may send Google anonymous statistics about how the text
+    recognition feature performs, such as how long it took and whether it
+    succeeded, and may download updates. These statistics never include your
+    images, documents or the text found in them. See
+    <a href="https://developers.google.com/ml-kit/terms">ML Kit Terms</a>.
+  </p>
+
+  <h2>App lock</h2>
+  <p>
+    If you turn on <strong>App lock</strong> in Settings, the app asks you to
+    unlock it with your phone's fingerprint, face unlock or screen lock PIN,
+    pattern or passcode. This check is done by your phone's operating system.
+    The app never sees, receives or stores your fingerprint, face data or
+    PIN; the phone only tells it whether unlocking succeeded.
+  </p>
+  <p>
+    <strong>Hide in recent apps</strong> stops your phone from showing the
+    app's contents in the recent-apps screen. On Android 12 and older it also
+    blocks screenshots inside the app while it is turned on.
+  </p>
+
   <h2>Google Drive backup (optional)</h2>
   <p>
     If you tap <strong>Connect Google Drive</strong> in Settings, you sign in
@@ -98,6 +129,11 @@
       account is connected in Settings.
     </li>
     <li>
+      The app reads the size of its backup folder and your Google account's
+      overall storage usage and limit, only to show them in Settings. These
+      figures are kept on your phone and not shared.
+    </li>
+    <li>
       Files in Google Drive are stored by Google under
       <a href="https://policies.google.com/privacy">Google's Privacy Policy</a>
       and count towards your own Google storage.
@@ -114,14 +150,19 @@
     <li><strong>Camera</strong>: to scan documents and record videos.</li>
     <li><strong>Microphone</strong>: to record audio with videos.</li>
     <li><strong>Photos and videos</strong>: to import images and videos you pick, and to save them.</li>
-    <li><strong>Internet</strong>: used only for Google sign-in and Google Drive sync.</li>
+    <li><strong>Biometrics</strong> (fingerprint / face unlock): only to unlock the app when App lock is on.</li>
+    <li><strong>Internet</strong>: used for Google sign-in and Google Drive backup, and by ML Kit as described above.</li>
   </ul>
-  <p>Each permission is used only when you start that action.</p>
+  <p>Each permission is used only when you start that action or turn on that setting.</p>
 
   <h2>What we do not do</h2>
   <ul>
     <li>We do not collect, store or sell any personal data.</li>
-    <li>We do not use analytics, advertising or tracking.</li>
+    <li>
+      We do not use analytics, advertising or tracking of our own. (The
+      only statistics sent anywhere are ML Kit's anonymous performance
+      statistics described above.)
+    </li>
     <li>We do not share your data with anyone.</li>
   </ul>
 
@@ -141,7 +182,8 @@
     </li>
     <li>
       <strong>Delete local files:</strong> delete them in the app, or
-      uninstall the app.
+      uninstall the app. Uninstalling also deletes the text read from your
+      documents for search.
     </li>
   </ul>
 
@@ -158,7 +200,6 @@
   </p>
 
   <h2>Contact</h2>
-  <!-- TODO: replace with the email address you want shown publicly. -->
   <p>Questions about this policy: <a href="mailto:indugundam2004@gmail.com">indugundam2004@gmail.com</a></p>
 </main>
 </body>
