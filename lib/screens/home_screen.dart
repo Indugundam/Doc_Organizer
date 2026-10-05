@@ -12,9 +12,10 @@ import '../theme/app_spacing.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/document_thumbnail.dart';
 import '../widgets/folder_tile.dart';
-import '../widgets/item_row.dart';
+import '../widgets/item_views.dart';
 import '../widgets/searchable_app_bar.dart';
 import '../widgets/settings_action.dart';
+import '../widgets/view_mode_action.dart';
 import 'document_viewer_screen.dart';
 import 'folder_screen.dart';
 
@@ -165,9 +166,10 @@ class _HomeScreenState extends State<HomeScreen> {
     if (choice == 'delete') await _deleteFolder(folder);
   }
 
-  Widget _buildFolderTile(Directory folder) {
+  Widget _buildFolderTile(Directory folder, bool grid) {
     return FolderTile(
       folder: folder,
+      grid: grid,
       onTap: () async {
         await Navigator.push(
           context,
@@ -187,7 +189,7 @@ class _HomeScreenState extends State<HomeScreen> {
         title: 'Doc Manager',
         hintText: 'Search folders and documents',
         onQueryChanged: _onQueryChanged,
-        actions: [settingsAction(context)],
+        actions: [viewModeAction(), settingsAction(context)],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -201,11 +203,10 @@ class _HomeScreenState extends State<HomeScreen> {
               buildFolder: _buildFolderTile,
               onOpenDocument: _openDocument,
             )
-          : ListView.separated(
-              padding: const EdgeInsets.only(bottom: 88),
+          : ItemCollection(
               itemCount: folders.length,
-              separatorBuilder: (context, index) => const ItemRowDivider(),
-              itemBuilder: (context, index) => _buildFolderTile(folders[index]),
+              itemBuilder: (context, index, grid) =>
+                  _buildFolderTile(folders[index], grid),
             ),
       floatingActionButton: _folders.isEmpty
           ? null
@@ -232,7 +233,7 @@ class _SearchResults extends StatelessWidget {
   final String query;
   final List<Directory> folders;
   final List<File> documents;
-  final Widget Function(Directory folder) buildFolder;
+  final Widget Function(Directory folder, bool grid) buildFolder;
   final ValueChanged<File> onOpenDocument;
 
   @override
@@ -269,10 +270,10 @@ class _SearchResults extends StatelessWidget {
           const SliverFillRemaining(hasScrollBody: false, child: _NoResults()),
         if (folders.isNotEmpty) ...[
           const _ResultsHeading('Folders'),
-          SliverList.separated(
+          ItemCollection.sliver(
             itemCount: folders.length,
-            separatorBuilder: (context, index) => const ItemRowDivider(),
-            itemBuilder: (context, index) => buildFolder(folders[index]),
+            itemBuilder: (context, index, grid) =>
+                buildFolder(folders[index], grid),
           ),
         ],
         if (documents.isNotEmpty) ...[

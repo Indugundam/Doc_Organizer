@@ -6,6 +6,7 @@ import 'services/app_lock_controller.dart';
 import 'services/search_index.dart';
 import 'services/sort_controller.dart';
 import 'services/sync_service.dart';
+import 'services/view_mode_controller.dart';
 import 'theme/app_theme.dart';
 import 'theme/theme_controller.dart';
 import 'widgets/app_lock_gate.dart';
@@ -14,6 +15,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ThemeController.load();
   await SortController.load();
+  await ViewModeController.load();
   await AppLockController.load();
   // PDF thumbnails and text extraction use pdfrx's engine directly.
   await pdfrxFlutterInitialize();

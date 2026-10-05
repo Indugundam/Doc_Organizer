@@ -19,12 +19,14 @@ import '../theme/app_spacing.dart';
 import '../utils/format_bytes.dart';
 import '../utils/format_date.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/breadcrumbs.dart';
 import '../widgets/document_thumbnail.dart';
 import '../widgets/folder_picker_sheet.dart';
 import '../widgets/folder_tile.dart';
-import '../widgets/item_row.dart';
+import '../widgets/item_views.dart';
 import '../widgets/searchable_app_bar.dart';
 import '../widgets/settings_action.dart';
+import '../widgets/view_mode_action.dart';
 import 'document_viewer_screen.dart';
 
 class FolderScreen extends StatefulWidget {
@@ -610,69 +612,88 @@ class _FolderScreenState extends State<FolderScreen> {
                 title: p.basename(widget.folder.path),
                 hintText: 'Search this folder',
                 onQueryChanged: (q) => setState(() => _query = q),
-                actions: [settingsAction(context)],
+                actions: [viewModeAction(), settingsAction(context)],
               ),
               _buildSelectionBar(),
             ],
           ),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : isEmpty
-            ? _EmptyState(onAdd: _openAddMenu)
-            : noMatches
-            ? const _NoResults()
-            : ListView.separated(
-                padding: const EdgeInsets.only(bottom: 88),
-                // Folders first, then documents, in one list.
-                itemCount: subfolders.length + documents.length,
-                separatorBuilder: (context, index) => const ItemRowDivider(),
-                itemBuilder: (context, index) {
-                  if (index < subfolders.length) {
-                    final folder = subfolders[index];
-                    // Folders are dimmed and inert while selecting
-                    // documents.
-                    return IgnorePointer(
-                      ignoring: _selecting,
-                      child: AnimatedOpacity(
-                        opacity: _selecting ? 0.4 : 1,
-                        duration: const Duration(milliseconds: 150),
-                        child: FolderTile(
-                          folder: folder,
-                          onTap: () async {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => FolderScreen(folder: folder),
-                              ),
-                            );
-                            await _load();
-                          },
-                          onMore: () => _openFolderMenu(folder),
-                        ),
-                      ),
-                    );
-                  }
-                  final file = documents[index - subfolders.length];
-                  return _DocumentTile(
-                    file: file,
-                    selecting: _selecting,
-                    selected: _selected.contains(file.path),
-                    onTap: () async {
-                      if (_selecting) return _toggleSelected(file);
-                      final deleted = await Navigator.push<bool>(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => DocumentViewerScreen(file: file),
-                        ),
-                      );
-                      if (deleted == true) await _load();
-                    },
-                    onLongPress: () => _toggleSelected(file),
-                    onMore: () => _openDocumentMenu(file),
-                  );
+        body: Column(
+          children: [
+            // Inert while selecting, like the folders below it.
+            IgnorePointer(
+              ignoring: _selecting,
+              child: Breadcrumbs(
+                folder: widget.folder,
+                onNavigate: (levelsUp) {
+                  var remaining = levelsUp;
+                  Navigator.popUntil(context, (_) => remaining-- <= 0);
                 },
               ),
+            ),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : isEmpty
+                  ? _EmptyState(onAdd: _openAddMenu)
+                  : noMatches
+                  ? const _NoResults()
+                  : ItemCollection(
+                      // Folders first, then documents, in one list or grid.
+                      itemCount: subfolders.length + documents.length,
+                      itemBuilder: (context, index, grid) {
+                        if (index < subfolders.length) {
+                          final folder = subfolders[index];
+                          // Folders are dimmed and inert while selecting
+                          // documents.
+                          return IgnorePointer(
+                            ignoring: _selecting,
+                            child: AnimatedOpacity(
+                              opacity: _selecting ? 0.4 : 1,
+                              duration: const Duration(milliseconds: 150),
+                              child: FolderTile(
+                                folder: folder,
+                                grid: grid,
+                                onTap: () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          FolderScreen(folder: folder),
+                                    ),
+                                  );
+                                  await _load();
+                                },
+                                onMore: () => _openFolderMenu(folder),
+                              ),
+                            ),
+                          );
+                        }
+                        final file = documents[index - subfolders.length];
+                        return _DocumentTile(
+                          file: file,
+                          grid: grid,
+                          selecting: _selecting,
+                          selected: _selected.contains(file.path),
+                          onTap: () async {
+                            if (_selecting) return _toggleSelected(file);
+                            final deleted = await Navigator.push<bool>(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    DocumentViewerScreen(file: file),
+                              ),
+                            );
+                            if (deleted == true) await _load();
+                          },
+                          onLongPress: () => _toggleSelected(file),
+                          onMore: () => _openDocumentMenu(file),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
         floatingActionButton: isEmpty || _selecting
             ? null
             : FloatingActionButton(
@@ -756,6 +777,7 @@ class _DocumentTile extends StatelessWidget {
     required this.onTap,
     required this.onLongPress,
     required this.onMore,
+    required this.grid,
   });
 
   final File file;
@@ -768,10 +790,45 @@ class _DocumentTile extends StatelessWidget {
   final VoidCallback onLongPress;
   final VoidCallback onMore;
 
+  /// Show as an [ItemCard] instead of an [ItemRow].
+  final bool grid;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final stat = file.statSync();
+    final title = p.basename(file.path);
+    final subtitle = formatBytes(stat.size);
+    final date = formatDate(stat.modified);
+    final trailing = selecting
+        ? Icon(
+            selected
+                ? FluentIcons.checkmark_circle_24_filled
+                : FluentIcons.circle_24_regular,
+            size: 22,
+            color: selected
+                ? theme.colorScheme.primary
+                : theme.colorScheme.onSurfaceVariant,
+          )
+        : IconButton(
+            onPressed: onMore,
+            icon: const Icon(FluentIcons.more_vertical_24_regular, size: 18),
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          );
+    if (grid) {
+      return ItemCard(
+        preview: DocumentThumbnail(file: file),
+        title: title,
+        subtitle: subtitle,
+        date: date,
+        selected: selected,
+        onTap: onTap,
+        onLongPress: onLongPress,
+        trailing: trailing,
+      );
+    }
     return ItemRow(
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(AppSpacing.s3),
@@ -785,29 +842,13 @@ class _DocumentTile extends StatelessWidget {
           child: DocumentThumbnail(file: file),
         ),
       ),
-      title: p.basename(file.path),
-      subtitle: formatBytes(stat.size),
-      date: formatDate(stat.modified),
+      title: title,
+      subtitle: subtitle,
+      date: date,
       selected: selected,
       onTap: onTap,
       onLongPress: onLongPress,
-      trailing: selecting
-          ? Icon(
-              selected
-                  ? FluentIcons.checkmark_circle_24_filled
-                  : FluentIcons.circle_24_regular,
-              size: 22,
-              color: selected
-                  ? theme.colorScheme.primary
-                  : theme.colorScheme.onSurfaceVariant,
-            )
-          : IconButton(
-              onPressed: onMore,
-              icon: const Icon(FluentIcons.more_vertical_24_regular, size: 18),
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            ),
+      trailing: trailing,
     );
   }
 }
