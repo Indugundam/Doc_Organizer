@@ -97,6 +97,20 @@ class StorageService {
     return files;
   }
 
+  /// Total size and number of documents stored on this device.
+  static Future<({int bytes, int documents})> usage() async {
+    var bytes = 0;
+    final documents = await listAllDocuments();
+    for (final file in documents) {
+      try {
+        bytes += await file.length();
+      } catch (_) {
+        // Deleted while counting.
+      }
+    }
+    return (bytes: bytes, documents: documents.length);
+  }
+
   static void _sortEntries<T extends FileSystemEntity>(List<T> entries) {
     switch (SortController.order.value) {
       case SortOrder.name:

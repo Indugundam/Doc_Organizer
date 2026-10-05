@@ -4,9 +4,11 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 import '../services/app_lock_controller.dart';
 import '../services/sort_controller.dart';
+import '../services/storage_service.dart';
 import '../services/sync_service.dart';
 import '../theme/app_spacing.dart';
 import '../theme/theme_controller.dart';
+import '../utils/format_bytes.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -55,6 +57,9 @@ class SettingsScreen extends StatelessWidget {
           _SectionHeading('Cloud backup'),
           const Card(child: _DriveSyncCard()),
           const SizedBox(height: AppSpacing.s7),
+          _SectionHeading('Storage'),
+          const Card(child: _StorageCard()),
+          const SizedBox(height: AppSpacing.s7),
           _SectionHeading('General'),
           Card(
             child: ValueListenableBuilder<SortOrder>(
@@ -84,7 +89,7 @@ class SettingsScreen extends StatelessWidget {
             child: ListTile(
               leading: Icon(FluentIcons.info_24_regular),
               title: Text('Doc Manager'),
-              subtitle: Text('Version 1.0.4'),
+              subtitle: Text('Version 1.0.5'),
             ),
           ),
         ],
@@ -101,7 +106,10 @@ class _SectionHeading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(left: AppSpacing.s2, bottom: AppSpacing.s3),
+      padding: const EdgeInsets.only(
+        left: AppSpacing.s2,
+        bottom: AppSpacing.s3,
+      ),
       child: Text(label, style: Theme.of(context).textTheme.labelLarge),
     );
   }
@@ -204,18 +212,15 @@ class _DriveSyncCard extends StatelessWidget {
                     color: error ? colors.error : null,
                   ),
                   title: Text(status.email ?? 'Google Drive'),
-                  subtitle: Text(
-                    syncing
-                        ? 'Syncing…'
-                        : error
-                        ? status.message ?? 'Sync failed'
-                        : _lastSyncedLabel(status.lastSynced),
-                  ),
+                  subtitle: syncing
+                      ? _SyncProgress(status: status)
+                      : Text(
+                          error
+                              ? status.message ?? 'Sync failed'
+                              : _lastSyncedLabel(status.lastSynced),
+                        ),
                   trailing: syncing
-                      ? const SizedBox.square(
-                          dimension: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
+                      ? null
                       : IconButton(
                           tooltip: 'Sync now',
                           icon: const Icon(FluentIcons.arrow_sync_24_regular),
@@ -260,9 +265,7 @@ class _PrivacyCard extends StatelessWidget {
           builder: (context, enabled, _) => SwitchListTile(
             secondary: const Icon(FluentIcons.lock_closed_24_regular),
             title: const Text('App lock'),
-            subtitle: const Text(
-              'Unlock with fingerprint, face or device PIN',
-            ),
+            subtitle: const Text('Unlock with fingerprint, face or device PIN'),
             value: enabled,
             onChanged: (value) => _toggleLock(context, value),
           ),
@@ -277,6 +280,121 @@ class _PrivacyCard extends StatelessWidget {
             value: hide,
             onChanged: AppLockController.setHideInRecents,
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// "Uploading 3 of 12" with a progress bar while a sync runs.
+class _SyncProgress extends StatelessWidget {
+  const _SyncProgress({required this.status});
+
+  final SyncStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = status.toUpload;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          total == 0
+              ? 'Checking for changes…'
+              : 'Uploading ${status.uploaded + 1 > total ? total : status.uploaded + 1} of $total',
+        ),
+        const SizedBox(height: AppSpacing.s2),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(AppSpacing.s1),
+          child: LinearProgressIndicator(
+            // Indeterminate until we know how much there is to upload.
+            value: total == 0 ? null : status.uploaded / total,
+            minHeight: 4,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Space used by documents on this phone, and by the backup and the whole
+/// Google account in Drive.
+class _StorageCard extends StatefulWidget {
+  const _StorageCard();
+
+  @override
+  State<_StorageCard> createState() => _StorageCardState();
+}
+
+class _StorageCardState extends State<_StorageCard> {
+  late final Future<({int bytes, int documents})> _phoneUsage =
+      StorageService.usage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        FutureBuilder<({int bytes, int documents})>(
+          future: _phoneUsage,
+          builder: (context, snapshot) {
+            final usage = snapshot.data;
+            return ListTile(
+              leading: const Icon(FluentIcons.phone_24_regular),
+              title: const Text('On this phone'),
+              subtitle: Text(
+                usage == null
+                    ? 'Calculating…'
+                    : '${formatBytes(usage.bytes)} · ${usage.documents} '
+                          '${usage.documents == 1 ? 'document' : 'documents'}',
+              ),
+            );
+          },
+        ),
+        ValueListenableBuilder<SyncStatus>(
+          valueListenable: SyncService.status,
+          builder: (context, status, _) {
+            final signedIn =
+                status.phase == SyncPhase.idle ||
+                status.phase == SyncPhase.syncing ||
+                status.phase == SyncPhase.error;
+            if (!signedIn || status.backupBytes == null) {
+              return const SizedBox.shrink();
+            }
+            final used = status.driveUsedBytes;
+            final limit = status.driveLimitBytes;
+            return Column(
+              children: [
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(FluentIcons.cloud_24_regular),
+                  title: const Text('In Google Drive'),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Backup: ${formatBytes(status.backupBytes!)}'),
+                      if (used != null)
+                        Text(
+                          limit == null
+                              ? 'Google account: ${formatBytes(used)} used'
+                              : 'Google account: ${formatBytes(used)} of '
+                                    '${formatBytes(limit)} used',
+                        ),
+                      if (used != null && limit != null && limit > 0) ...[
+                        const SizedBox(height: AppSpacing.s2),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(AppSpacing.s1),
+                          child: LinearProgressIndicator(
+                            value: (used / limit).clamp(0, 1).toDouble(),
+                            minHeight: 4,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ],
     );

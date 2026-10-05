@@ -16,12 +16,35 @@ enum SyncPhase { notConfigured, signedOut, idle, syncing, error }
 
 @immutable
 class SyncStatus {
-  const SyncStatus(this.phase, {this.email, this.lastSynced, this.message});
+  const SyncStatus(
+    this.phase, {
+    this.email,
+    this.lastSynced,
+    this.message,
+    this.uploaded = 0,
+    this.toUpload = 0,
+    this.backupBytes,
+    this.driveUsedBytes,
+    this.driveLimitBytes,
+  });
 
   final SyncPhase phase;
   final String? email;
   final DateTime? lastSynced;
   final String? message;
+
+  /// Progress of the running sync: files uploaded so far, out of
+  /// [toUpload]. Both 0 when there's nothing to upload.
+  final int uploaded;
+  final int toUpload;
+
+  /// Size of the DocManager backup folder in Drive, as of the last sync.
+  final int? backupBytes;
+
+  /// The Google account's overall storage use and quota, as of the last
+  /// sync. [driveLimitBytes] is null for unlimited plans.
+  final int? driveUsedBytes;
+  final int? driveLimitBytes;
 }
 
 /// One-way backup of the local `DocManager` directory to a `DocManager`
@@ -60,6 +83,12 @@ class SyncService {
   static Timer? _timer;
   static bool _running = false;
   static bool _again = false;
+  static int _uploaded = 0;
+  static int _toUpload = 0;
+
+  /// Whether this sync changed anything in Drive, so the backup size needs
+  /// re-measuring.
+  static bool _remoteChanged = false;
 
   static Future<void> init() => _initFuture ??= _init();
 
@@ -147,6 +176,8 @@ class SyncService {
       return;
     }
     _running = true;
+    _uploaded = 0;
+    _toUpload = 0;
     _setStatus(SyncPhase.syncing);
     try {
       do {
@@ -180,10 +211,60 @@ class SyncService {
       final rootId = await _ensureRemoteRoot(api);
       final local = await _scanLocal(root);
       final remote = await _scanRemote(api, rootId);
+      _uploaded = 0;
+      _toUpload = _countUploads(local, remote);
+      _remoteChanged = false;
+      _setStatus(SyncPhase.syncing);
       await _mirror(api, root, rootId, local, remote);
       await _trashDeleted(api, local, remote);
+      await _measureStorage(
+        api,
+        _remoteChanged ? await _scanRemote(api, rootId) : remote,
+      );
     } finally {
       client.close();
+    }
+  }
+
+  /// How many files [_mirror] will upload, for the progress display. Mirrors
+  /// its decisions (an estimate only; [_uploadContent] grows the total if it
+  /// turns out low).
+  static int _countUploads(
+    Map<String, _LocalItem> local,
+    _RemoteTree remote,
+  ) {
+    var count = 0;
+    for (final MapEntry(key: path, value: l) in local.entries) {
+      if (l.isDir) continue;
+      final s = _state.entries[path];
+      final r = s == null || s.isDir ? null : remote.byId[s.id];
+      if (r != null) {
+        if (s!.localMs != l.modifiedMs || s.remoteMs != r.modifiedMs) count++;
+      } else {
+        final candidate = remote.byPath[path];
+        if (candidate == null || candidate.isDir || candidate.size != l.size) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
+  /// Records the backup folder's size and the account's storage quota for
+  /// Settings. Failure here never fails the sync.
+  static Future<void> _measureStorage(
+    drive.DriveApi api,
+    _RemoteTree remote,
+  ) async {
+    _state.backupBytes = remote.byId.values
+        .where((item) => !item.isDir)
+        .fold<int>(0, (sum, item) => sum + item.size);
+    try {
+      final about = await api.about.get($fields: 'storageQuota(limit, usage)');
+      _state.driveUsedBytes = int.tryParse(about.storageQuota?.usage ?? '');
+      _state.driveLimitBytes = int.tryParse(about.storageQuota?.limit ?? '');
+    } catch (_) {
+      // Keep the last known quota.
     }
   }
 
@@ -297,6 +378,7 @@ class SyncService {
           removeParents: sameParent ? null : r.parentId,
           $fields: 'id',
         );
+        _remoteChanged = true;
       }
 
       if (l.isDir) {
@@ -325,6 +407,7 @@ class SyncService {
       if (trashed.any((t) => p.posix.isWithin(t, path))) continue;
       if (remote.byId.containsKey(id)) {
         await api.files.update(drive.File()..trashed = true, id);
+        _remoteChanged = true;
       }
       trashed.add(path);
     }
@@ -348,6 +431,7 @@ class SyncService {
         $fields: 'id',
       );
       _state.entries[path] = _SyncEntry(created.id!, isDir: true);
+      _remoteChanged = true;
       return created.id!;
     }
     return _uploadContent(api, root, path, l, parentId: parentId);
@@ -398,6 +482,10 @@ class SyncService {
       localMs: l.modifiedMs,
       remoteMs: result.modifiedTime?.millisecondsSinceEpoch,
     );
+    _remoteChanged = true;
+    _uploaded++;
+    if (_uploaded > _toUpload) _toUpload = _uploaded;
+    _setStatus(SyncPhase.syncing);
     return result.id!;
   }
 
@@ -490,11 +578,17 @@ class SyncService {
   }
 
   static void _setStatus(SyncPhase phase, {String? message}) {
+    final syncing = phase == SyncPhase.syncing;
     status.value = SyncStatus(
       phase,
       email: _account?.email,
       lastSynced: _state.lastSynced,
       message: message,
+      uploaded: syncing ? _uploaded : 0,
+      toUpload: syncing ? _toUpload : 0,
+      backupBytes: _state.backupBytes,
+      driveUsedBytes: _state.driveUsedBytes,
+      driveLimitBytes: _state.driveLimitBytes,
     );
   }
 }
@@ -567,6 +661,9 @@ class _SyncState {
   String? account;
   String? rootId;
   DateTime? lastSynced;
+  int? backupBytes;
+  int? driveUsedBytes;
+  int? driveLimitBytes;
   final entries = <String, _SyncEntry>{};
 
   /// Moves [from] and everything under it to [to].
@@ -594,7 +691,10 @@ class _SyncState {
       state
         ..account = json['account'] as String?
         ..rootId = json['rootId'] as String?
-        ..lastSynced = DateTime.tryParse(json['lastSynced'] as String? ?? '');
+        ..lastSynced = DateTime.tryParse(json['lastSynced'] as String? ?? '')
+        ..backupBytes = json['backupBytes'] as int?
+        ..driveUsedBytes = json['driveUsedBytes'] as int?
+        ..driveLimitBytes = json['driveLimitBytes'] as int?;
       final entries = json['entries'] as Map<String, dynamic>? ?? {};
       for (final e in entries.entries) {
         state.entries[e.key] = _SyncEntry.fromJson(
@@ -615,6 +715,9 @@ class _SyncState {
         'account': account,
         'rootId': rootId,
         'lastSynced': lastSynced?.toIso8601String(),
+        'backupBytes': backupBytes,
+        'driveUsedBytes': driveUsedBytes,
+        'driveLimitBytes': driveLimitBytes,
         'entries': entries.map((k, v) => MapEntry(k, v.toJson())),
       }),
     );
