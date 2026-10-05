@@ -11,15 +11,18 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:share_plus/share_plus.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
-import '../services/sort_controller.dart';
 import '../services/search_index.dart';
+import '../services/sort_controller.dart';
 import '../services/storage_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
+import '../utils/format_bytes.dart';
+import '../utils/format_date.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/document_thumbnail.dart';
 import '../widgets/folder_picker_sheet.dart';
 import '../widgets/folder_tile.dart';
+import '../widgets/item_row.dart';
 import '../widgets/searchable_app_bar.dart';
 import '../widgets/settings_action.dart';
 import 'document_viewer_screen.dart';
@@ -619,112 +622,56 @@ class _FolderScreenState extends State<FolderScreen> {
             ? _EmptyState(onAdd: _openAddMenu)
             : noMatches
             ? const _NoResults()
-            : CustomScrollView(
-                slivers: [
-                  if (subfolders.isNotEmpty) ...[
-                    const SliverPadding(
-                      padding: EdgeInsets.fromLTRB(
-                        AppSpacing.s5,
-                        AppSpacing.s5,
-                        AppSpacing.s5,
-                        AppSpacing.s2,
-                      ),
-                      sliver: SliverToBoxAdapter(
-                        child: _SectionLabel('Folders'),
-                      ),
-                    ),
-                    SliverPadding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.s5,
-                      ),
-                      sliver: SliverGrid(
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 2,
-                              crossAxisSpacing: AppSpacing.s4,
-                              mainAxisSpacing: AppSpacing.s4,
-                              childAspectRatio: 1.05,
-                            ),
-                        delegate: SliverChildBuilderDelegate((context, index) {
-                          final folder = subfolders[index];
-                          // Folders are dimmed and inert while selecting
-                          // documents.
-                          return IgnorePointer(
-                            ignoring: _selecting,
-                            child: AnimatedOpacity(
-                              opacity: _selecting ? 0.4 : 1,
-                              duration: const Duration(milliseconds: 150),
-                              child: FolderTile(
-                                folder: folder,
-                                onTap: () async {
-                                  await Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          FolderScreen(folder: folder),
-                                    ),
-                                  );
-                                  await _load();
-                                },
-                                onMore: () => _openFolderMenu(folder),
+            : ListView.separated(
+                padding: const EdgeInsets.only(bottom: 88),
+                // Folders first, then documents, in one list.
+                itemCount: subfolders.length + documents.length,
+                separatorBuilder: (context, index) => const ItemRowDivider(),
+                itemBuilder: (context, index) {
+                  if (index < subfolders.length) {
+                    final folder = subfolders[index];
+                    // Folders are dimmed and inert while selecting
+                    // documents.
+                    return IgnorePointer(
+                      ignoring: _selecting,
+                      child: AnimatedOpacity(
+                        opacity: _selecting ? 0.4 : 1,
+                        duration: const Duration(milliseconds: 150),
+                        child: FolderTile(
+                          folder: folder,
+                          onTap: () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => FolderScreen(folder: folder),
                               ),
-                            ),
-                          );
-                        }, childCount: subfolders.length),
+                            );
+                            await _load();
+                          },
+                          onMore: () => _openFolderMenu(folder),
+                        ),
                       ),
-                    ),
-                  ],
-                  if (documents.isNotEmpty) ...[
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.s5,
-                        AppSpacing.s5,
-                        AppSpacing.s5,
-                        AppSpacing.s2,
-                      ),
-                      sliver: SliverToBoxAdapter(
-                        child: _SectionLabel('Documents'),
-                      ),
-                    ),
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.s5,
-                        0,
-                        AppSpacing.s5,
-                        AppSpacing.s5,
-                      ),
-                      sliver: SliverGrid(
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 3,
-                              crossAxisSpacing: AppSpacing.s3,
-                              mainAxisSpacing: AppSpacing.s3,
-                            ),
-                        delegate: SliverChildBuilderDelegate((context, index) {
-                          final file = documents[index];
-                          return _DocumentTile(
-                            file: file,
-                            selecting: _selecting,
-                            selected: _selected.contains(file.path),
-                            onTap: () async {
-                              if (_selecting) return _toggleSelected(file);
-                              final deleted = await Navigator.push<bool>(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      DocumentViewerScreen(file: file),
-                                ),
-                              );
-                              if (deleted == true) await _load();
-                            },
-                            onLongPress: () => _toggleSelected(file),
-                            onMore: () => _openDocumentMenu(file),
-                          );
-                        }, childCount: documents.length),
-                      ),
-                    ),
-                  ],
-                ],
+                    );
+                  }
+                  final file = documents[index - subfolders.length];
+                  return _DocumentTile(
+                    file: file,
+                    selecting: _selecting,
+                    selected: _selected.contains(file.path),
+                    onTap: () async {
+                      if (_selecting) return _toggleSelected(file);
+                      final deleted = await Navigator.push<bool>(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => DocumentViewerScreen(file: file),
+                        ),
+                      );
+                      if (deleted == true) await _load();
+                    },
+                    onLongPress: () => _toggleSelected(file),
+                    onMore: () => _openDocumentMenu(file),
+                  );
+                },
               ),
         floatingActionButton: isEmpty || _selecting
             ? null
@@ -746,22 +693,6 @@ class _NoResults extends StatelessWidget {
       child: Text(
         'No matches found',
         style: Theme.of(context).textTheme.bodyMedium,
-      ),
-    );
-  }
-}
-
-class _SectionLabel extends StatelessWidget {
-  const _SectionLabel(this.label);
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      label,
-      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
       ),
     );
   }
@@ -839,104 +770,44 @@ class _DocumentTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(AppSpacing.s3),
-      child: Material(
-        color: Theme.of(context).colorScheme.surface,
-        child: InkWell(
-          onTap: onTap,
-          onLongPress: onLongPress,
-          child: Container(
-            decoration: BoxDecoration(
-              border: Border.all(color: Theme.of(context).colorScheme.outline),
-              borderRadius: BorderRadius.circular(AppSpacing.s3),
-            ),
-            foregroundDecoration: selected
-                ? BoxDecoration(
-                    color: primary.withValues(alpha: 0.18),
-                    border: Border.all(color: primary, width: 3),
-                    borderRadius: BorderRadius.circular(AppSpacing.s3),
-                  )
-                : null,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                DocumentThumbnail(file: file),
-                if (selecting)
-                  Positioned(
-                    right: AppSpacing.s2,
-                    top: AppSpacing.s2,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: selected
-                            ? Colors.white
-                            : Colors.black.withValues(alpha: 0.25),
-                      ),
-                      child: Icon(
-                        selected
-                            ? FluentIcons.checkmark_circle_24_filled
-                            : FluentIcons.circle_24_regular,
-                        size: 22,
-                        color: selected ? primary : Colors.white,
-                      ),
-                    ),
-                  )
-                else
-                  Positioned(
-                    right: 0,
-                    top: 0,
-                    child: IconButton(
-                      onPressed: onMore,
-                      icon: const Icon(
-                        FluentIcons.more_vertical_24_regular,
-                        size: 16,
-                      ),
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
-                      ),
-                    ),
-                  ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.s3,
-                      vertical: AppSpacing.s2,
-                    ),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.black.withValues(alpha: 0),
-                          Colors.black.withValues(alpha: 0.55),
-                        ],
-                      ),
-                    ),
-                    child: Text(
-                      p.basename(file.path),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+    final theme = Theme.of(context);
+    final stat = file.statSync();
+    return ItemRow(
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(AppSpacing.s3),
+        child: Container(
+          width: 44,
+          height: kItemRowLeadingWidth,
+          foregroundDecoration: BoxDecoration(
+            border: Border.all(color: theme.colorScheme.outline),
+            borderRadius: BorderRadius.circular(AppSpacing.s3),
           ),
+          child: DocumentThumbnail(file: file),
         ),
       ),
+      title: p.basename(file.path),
+      subtitle: formatBytes(stat.size),
+      date: formatDate(stat.modified),
+      selected: selected,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      trailing: selecting
+          ? Icon(
+              selected
+                  ? FluentIcons.checkmark_circle_24_filled
+                  : FluentIcons.circle_24_regular,
+              size: 22,
+              color: selected
+                  ? theme.colorScheme.primary
+                  : theme.colorScheme.onSurfaceVariant,
+            )
+          : IconButton(
+              onPressed: onMore,
+              icon: const Icon(FluentIcons.more_vertical_24_regular, size: 18),
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            ),
     );
   }
 }

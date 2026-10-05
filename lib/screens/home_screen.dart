@@ -12,6 +12,7 @@ import '../theme/app_spacing.dart';
 import '../widgets/app_dialogs.dart';
 import '../widgets/document_thumbnail.dart';
 import '../widgets/folder_tile.dart';
+import '../widgets/item_row.dart';
 import '../widgets/searchable_app_bar.dart';
 import '../widgets/settings_action.dart';
 import 'document_viewer_screen.dart';
@@ -200,15 +201,10 @@ class _HomeScreenState extends State<HomeScreen> {
               buildFolder: _buildFolderTile,
               onOpenDocument: _openDocument,
             )
-          : GridView.builder(
-              padding: const EdgeInsets.all(AppSpacing.s5),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: AppSpacing.s4,
-                mainAxisSpacing: AppSpacing.s4,
-                childAspectRatio: 1.05,
-              ),
+          : ListView.separated(
+              padding: const EdgeInsets.only(bottom: 88),
               itemCount: folders.length,
+              separatorBuilder: (context, index) => const ItemRowDivider(),
               itemBuilder: (context, index) => _buildFolderTile(folders[index]),
             ),
       floatingActionButton: _folders.isEmpty
@@ -270,26 +266,13 @@ class _SearchResults extends StatelessWidget {
           ),
         ),
         if (folders.isEmpty && documents.isEmpty)
-          const SliverFillRemaining(
-            hasScrollBody: false,
-            child: _NoResults(),
-          ),
+          const SliverFillRemaining(hasScrollBody: false, child: _NoResults()),
         if (folders.isNotEmpty) ...[
           const _ResultsHeading('Folders'),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.s5),
-            sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: AppSpacing.s4,
-                mainAxisSpacing: AppSpacing.s4,
-                childAspectRatio: 1.05,
-              ),
-              delegate: SliverChildBuilderDelegate(
-                (context, index) => buildFolder(folders[index]),
-                childCount: folders.length,
-              ),
-            ),
+          SliverList.separated(
+            itemCount: folders.length,
+            separatorBuilder: (context, index) => const ItemRowDivider(),
+            itemBuilder: (context, index) => buildFolder(folders[index]),
           ),
         ],
         if (documents.isNotEmpty) ...[
