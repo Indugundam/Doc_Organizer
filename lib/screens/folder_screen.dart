@@ -646,7 +646,7 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: AppSpacing.s2),
             Text(
-              'Scan a document, add a photo or video, import\na file, or create a subfolder to get started.',
+              'Scan a document, add a photo or video, import a file, or create a subfolder to get started.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium,
             ),

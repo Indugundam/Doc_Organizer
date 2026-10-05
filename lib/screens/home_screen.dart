@@ -110,19 +110,22 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openFolderMenu(Directory folder) async {
-    final choice = await AppDialogs.showActionSheet(context, actions: [
-      const AppSheetAction(
-        id: 'rename',
-        icon: FluentIcons.rename_24_regular,
-        label: 'Rename',
-      ),
-      const AppSheetAction(
-        id: 'delete',
-        icon: FluentIcons.delete_24_regular,
-        label: 'Delete',
-        destructive: true,
-      ),
-    ]);
+    final choice = await AppDialogs.showActionSheet(
+      context,
+      actions: [
+        const AppSheetAction(
+          id: 'rename',
+          icon: FluentIcons.rename_24_regular,
+          label: 'Rename',
+        ),
+        const AppSheetAction(
+          id: 'delete',
+          icon: FluentIcons.delete_24_regular,
+          label: 'Delete',
+          destructive: true,
+        ),
+      ],
+    );
     if (choice == 'rename') await _renameFolder(folder);
     if (choice == 'delete') await _deleteFolder(folder);
   }
@@ -140,35 +143,35 @@ class _HomeScreenState extends State<HomeScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _folders.isEmpty
-              ? _EmptyState(onCreateFolder: _createFolder)
-              : folders.isEmpty
-                  ? const _NoResults()
-                  : GridView.builder(
-                      padding: const EdgeInsets.all(AppSpacing.s5),
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        crossAxisSpacing: AppSpacing.s4,
-                        mainAxisSpacing: AppSpacing.s4,
-                        childAspectRatio: 1.05,
+          ? _EmptyState(onCreateFolder: _createFolder)
+          : folders.isEmpty
+          ? const _NoResults()
+          : GridView.builder(
+              padding: const EdgeInsets.all(AppSpacing.s5),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: AppSpacing.s4,
+                mainAxisSpacing: AppSpacing.s4,
+                childAspectRatio: 1.05,
+              ),
+              itemCount: folders.length,
+              itemBuilder: (context, index) {
+                final folder = folders[index];
+                return FolderTile(
+                  folder: folder,
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => FolderScreen(folder: folder),
                       ),
-                      itemCount: folders.length,
-                      itemBuilder: (context, index) {
-                        final folder = folders[index];
-                        return FolderTile(
-                          folder: folder,
-                          onTap: () async {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => FolderScreen(folder: folder),
-                              ),
-                            );
-                            await _load();
-                          },
-                          onMore: () => _openFolderMenu(folder),
-                        );
-                      },
-                    ),
+                    );
+                    await _load();
+                  },
+                  onMore: () => _openFolderMenu(folder),
+                );
+              },
+            ),
       floatingActionButton: _folders.isEmpty
           ? null
           : FloatingActionButton.extended(
@@ -221,10 +224,13 @@ class _EmptyState extends StatelessWidget {
               ),
             ),
             const SizedBox(height: AppSpacing.s6),
-            Text('No folders yet', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'No folders yet',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: AppSpacing.s2),
             Text(
-              'Create a folder like "Bills" or "Hospital" to start\norganizing your documents.',
+              'Create a folder like "Bills" or "Hospital" to start organizing your documents.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
@@ -240,4 +246,3 @@ class _EmptyState extends StatelessWidget {
     );
   }
 }
-

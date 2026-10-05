@@ -2,6 +2,7 @@ import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import '../services/app_lock_controller.dart';
 import '../services/sort_controller.dart';
 import '../services/sync_service.dart';
 import '../theme/app_spacing.dart';
@@ -48,6 +49,9 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.s7),
+          _SectionHeading('Privacy'),
+          const Card(child: _PrivacyCard()),
+          const SizedBox(height: AppSpacing.s7),
           _SectionHeading('Cloud backup'),
           const Card(child: _DriveSyncCard()),
           const SizedBox(height: AppSpacing.s7),
@@ -80,7 +84,7 @@ class SettingsScreen extends StatelessWidget {
             child: ListTile(
               leading: Icon(FluentIcons.info_24_regular),
               title: Text('Doc Manager'),
-              subtitle: Text('Version 1.0.1'),
+              subtitle: Text('Version 1.0.2'),
             ),
           ),
         ],
@@ -231,6 +235,50 @@ class _DriveSyncCard extends StatelessWidget {
             );
         }
       },
+    );
+  }
+}
+
+class _PrivacyCard extends StatelessWidget {
+  const _PrivacyCard();
+
+  Future<void> _toggleLock(BuildContext context, bool enabled) async {
+    final error = await AppLockController.setLockEnabled(enabled);
+    if (error != null && context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        ValueListenableBuilder<bool>(
+          valueListenable: AppLockController.lockEnabled,
+          builder: (context, enabled, _) => SwitchListTile(
+            secondary: const Icon(FluentIcons.lock_closed_24_regular),
+            title: const Text('App lock'),
+            subtitle: const Text(
+              'Unlock with fingerprint, face or device PIN',
+            ),
+            value: enabled,
+            onChanged: (value) => _toggleLock(context, value),
+          ),
+        ),
+        const Divider(height: 1),
+        ValueListenableBuilder<bool>(
+          valueListenable: AppLockController.hideInRecents,
+          builder: (context, hide, _) => SwitchListTile(
+            secondary: const Icon(FluentIcons.eye_off_24_regular),
+            title: const Text('Hide in recent apps'),
+            subtitle: const Text('Hide the app preview in the app switcher'),
+            value: hide,
+            onChanged: AppLockController.setHideInRecents,
+          ),
+        ),
+      ],
     );
   }
 }
