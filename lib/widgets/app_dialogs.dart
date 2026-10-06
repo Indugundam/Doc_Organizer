@@ -55,7 +55,7 @@ class AppDialogs {
         ),
         title: Row(
           children: [
-            _DialogIcon(icon: icon),
+            AppDialogIcon(icon: icon),
             const SizedBox(width: AppSpacing.s4),
             Expanded(child: Text(title)),
           ],
@@ -109,7 +109,7 @@ class AppDialogs {
         ),
         title: Row(
           children: [
-            const _DialogIcon(
+            const AppDialogIcon(
               icon: FluentIcons.delete_24_regular,
               background: AppColors.errorBg,
               foreground: AppColors.error500,
@@ -175,8 +175,10 @@ class AppDialogs {
   }
 }
 
-class _DialogIcon extends StatelessWidget {
-  const _DialogIcon({
+/// Round tinted icon shown at the start of every dialog title.
+class AppDialogIcon extends StatelessWidget {
+  const AppDialogIcon({
+    super.key,
     required this.icon,
     this.background = AppColors.primary25,
     this.foreground = AppColors.primary700,

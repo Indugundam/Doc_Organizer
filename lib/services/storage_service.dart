@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'reminder_service.dart';
 import 'search_index.dart';
 import 'sort_controller.dart';
 import 'sync_service.dart';
@@ -68,11 +69,13 @@ class StorageService {
     await folder.rename(newPath);
     await SyncService.recordLocalMove(folder.path, newPath);
     await SearchIndex.recordMove(folder.path, newPath);
+    await ReminderService.recordMove(folder.path, newPath);
     SyncService.requestSync();
   }
 
   static Future<void> deleteFolder(Directory folder) async {
     await folder.delete(recursive: true);
+    await ReminderService.recordDelete(folder.path);
     SyncService.requestSync();
     SearchIndex.scheduleUpdate();
   }
@@ -171,6 +174,7 @@ class StorageService {
     final renamed = await file.rename(newPath);
     await SyncService.recordLocalMove(file.path, newPath);
     await SearchIndex.recordMove(file.path, newPath);
+    await ReminderService.recordMove(file.path, newPath);
     SyncService.requestSync();
     return renamed;
   }
@@ -190,6 +194,7 @@ class StorageService {
     // Same file, new place: Drive moves its copy and search keeps its text.
     await SyncService.recordLocalMove(file.path, destPath);
     await SearchIndex.recordMove(file.path, destPath);
+    await ReminderService.recordMove(file.path, destPath);
     SyncService.requestSync();
     return moved;
   }
@@ -221,6 +226,7 @@ class StorageService {
   static Future<void> deleteDocument(File file) async {
     if (await file.exists()) {
       await file.delete();
+      await ReminderService.recordDelete(file.path);
       SyncService.requestSync();
       SearchIndex.scheduleUpdate();
     }

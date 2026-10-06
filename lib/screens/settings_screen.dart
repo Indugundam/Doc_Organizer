@@ -9,6 +9,7 @@ import '../services/sync_service.dart';
 import '../theme/app_spacing.dart';
 import '../theme/theme_controller.dart';
 import '../utils/format_bytes.dart';
+import '../widgets/app_toast.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -147,21 +148,40 @@ class _SelectableOption extends StatelessWidget {
 class _DriveSyncCard extends StatelessWidget {
   const _DriveSyncCard();
 
-  Future<void> _signIn(BuildContext context) async {
+  Future<void> _signIn() async {
     try {
       await SyncService.signIn();
+      final email = SyncService.status.value.email;
+      AppToast.success(
+        email == null
+            ? 'Google Drive connected'
+            : 'Google Drive connected as $email',
+      );
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled) return;
-      if (context.mounted) _showError(context, e.description ?? e.code.name);
+      AppToast.error(e.description ?? e.code.name);
     } catch (e) {
-      if (context.mounted) _showError(context, e.toString());
+      AppToast.error(e);
     }
   }
 
-  void _showError(BuildContext context, String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _signOut() async {
+    try {
+      await SyncService.signOut();
+      AppToast.success('Google Drive disconnected');
+    } catch (e) {
+      AppToast.error(e);
+    }
+  }
+
+  Future<void> _syncNow() async {
+    await SyncService.syncNow();
+    final status = SyncService.status.value;
+    if (status.phase == SyncPhase.error) {
+      AppToast.error(status.message ?? 'Sync failed');
+    } else if (status.phase == SyncPhase.idle) {
+      AppToast.success('Backup is up to date');
+    }
   }
 
   static String _lastSyncedLabel(DateTime? time) {
@@ -192,7 +212,7 @@ class _DriveSyncCard extends StatelessWidget {
               subtitle: Text(
                 status.message ?? 'Back up your folders to Google Drive',
               ),
-              onTap: () => _signIn(context),
+              onTap: _signIn,
             );
           case SyncPhase.idle:
           case SyncPhase.syncing:
@@ -224,7 +244,7 @@ class _DriveSyncCard extends StatelessWidget {
                       : IconButton(
                           tooltip: 'Sync now',
                           icon: const Icon(FluentIcons.arrow_sync_24_regular),
-                          onPressed: SyncService.syncNow,
+                          onPressed: _syncNow,
                         ),
                 ),
                 const Divider(height: 1),
@@ -234,7 +254,7 @@ class _DriveSyncCard extends StatelessWidget {
                   subtitle: const Text(
                     'Files stay on this device and in Drive',
                   ),
-                  onTap: SyncService.signOut,
+                  onTap: _signOut,
                 ),
               ],
             );
@@ -247,12 +267,13 @@ class _DriveSyncCard extends StatelessWidget {
 class _PrivacyCard extends StatelessWidget {
   const _PrivacyCard();
 
-  Future<void> _toggleLock(BuildContext context, bool enabled) async {
+  Future<void> _toggleLock(bool enabled) async {
     final error = await AppLockController.setLockEnabled(enabled);
-    if (error != null && context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error)));
+    if (error != null) {
+      AppToast.error(error);
+    } else if (AppLockController.lockEnabled.value == enabled) {
+      // Unchanged means the confirmation prompt was cancelled.
+      AppToast.success(enabled ? 'App lock turned on' : 'App lock turned off');
     }
   }
 
@@ -267,7 +288,7 @@ class _PrivacyCard extends StatelessWidget {
             title: const Text('App lock'),
             subtitle: const Text('Unlock with fingerprint, face or device PIN'),
             value: enabled,
-            onChanged: (value) => _toggleLock(context, value),
+            onChanged: _toggleLock,
           ),
         ),
         const Divider(height: 1),

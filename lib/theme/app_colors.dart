@@ -28,6 +28,9 @@ class AppColors {
   static const Color error700 = Color(0xFFC53338);
   static const Color errorBg = Color(0xFFFDEEEE);
 
+  static const Color success500 = Color(0xFF12B76A);
+  static const Color warning500 = Color(0xFFF79009);
+
   // Dark theme surface tokens.
   static const Color darkBg = Color(0xFF111316);
   static const Color darkSurface = Color(0xFF1B1D21);

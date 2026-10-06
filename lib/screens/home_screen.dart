@@ -10,9 +10,11 @@ import '../services/storage_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/app_toast.dart';
 import '../widgets/document_thumbnail.dart';
 import '../widgets/folder_tile.dart';
 import '../widgets/item_views.dart';
+import '../widgets/reminders_action.dart';
 import '../widgets/searchable_app_bar.dart';
 import '../widgets/settings_action.dart';
 import '../widgets/view_mode_action.dart';
@@ -92,12 +94,6 @@ class _HomeScreenState extends State<HomeScreen> {
     await _load();
   }
 
-  void _showError(Object e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-    );
-  }
-
   Future<void> _createFolder() async {
     final name = await AppDialogs.promptForName(
       context,
@@ -108,9 +104,10 @@ class _HomeScreenState extends State<HomeScreen> {
     if (name == null || name.trim().isEmpty) return;
     try {
       await StorageService.createFolder(name);
+      AppToast.success('Folder "${name.trim()}" created');
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -126,9 +123,10 @@ class _HomeScreenState extends State<HomeScreen> {
     if (name == null || name.trim().isEmpty || name == current) return;
     try {
       await StorageService.renameFolder(folder, name);
+      AppToast.success('Folder renamed to "${name.trim()}"');
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -140,7 +138,12 @@ class _HomeScreenState extends State<HomeScreen> {
           '"${p.basename(folder.path)}" and everything inside it will be permanently deleted.',
     );
     if (confirmed == true) {
-      await StorageService.deleteFolder(folder);
+      try {
+        await StorageService.deleteFolder(folder);
+        AppToast.success('Folder deleted');
+      } catch (e) {
+        AppToast.error(e);
+      }
       await _load();
     }
   }
@@ -189,7 +192,11 @@ class _HomeScreenState extends State<HomeScreen> {
         title: 'Doc Manager',
         hintText: 'Search folders and documents',
         onQueryChanged: _onQueryChanged,
-        actions: [viewModeAction(), settingsAction(context)],
+        actions: [
+          viewModeAction(),
+          remindersAction(context),
+          settingsAction(context),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())

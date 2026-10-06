@@ -8,11 +8,15 @@ import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
+import '../services/reminder_service.dart';
 import '../services/storage_service.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_theme.dart';
 import '../utils/file_type_style.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/app_toast.dart';
+import '../widgets/reminder_dialog.dart';
+import '../widgets/reminders_action.dart';
 import '../widgets/settings_action.dart';
 
 class DocumentViewerScreen extends StatefulWidget {
@@ -25,12 +29,20 @@ class DocumentViewerScreen extends StatefulWidget {
 }
 
 class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  @override
+  void initState() {
+    super.initState();
+    ReminderService.revision.addListener(_onRemindersChanged);
   }
 
-  void _showError(Object e) {
-    _showMessage(e.toString().replaceFirst('Exception: ', ''));
+  @override
+  void dispose() {
+    ReminderService.revision.removeListener(_onRemindersChanged);
+    super.dispose();
+  }
+
+  void _onRemindersChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _share() async {
@@ -42,7 +54,7 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
         ),
       );
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -53,9 +65,9 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
         fileName: p.basename(widget.file.path),
         bytes: bytes,
       );
-      if (saved != null) _showMessage('Saved to device');
+      if (saved != null) AppToast.success('Saved to device');
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -66,8 +78,15 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
       message: '"${p.basename(widget.file.path)}" will be permanently deleted.',
     );
     if (confirmed == true) {
-      await StorageService.deleteDocument(widget.file);
+      try {
+        await StorageService.deleteDocument(widget.file);
+      } catch (e) {
+        AppToast.error(e);
+        return;
+      }
+      // Popped first: leaving the page would hide a toast shown here.
       if (mounted) Navigator.pop(context, true);
+      AppToast.success('Document deleted');
     }
   }
 
@@ -81,6 +100,22 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
       appBar: AppBar(
         title: Text(p.basename(file.path), overflow: TextOverflow.ellipsis),
         actions: [
+          Builder(
+            builder: (context) {
+              final reminder = ReminderService.reminderFor(file);
+              return IconButton(
+                icon: Icon(
+                  reminder == null
+                      ? FluentIcons.calendar_clock_24_regular
+                      : FluentIcons.calendar_clock_24_filled,
+                ),
+                onPressed: () => editDocumentReminder(context, file),
+                tooltip: reminder == null
+                    ? 'Set reminder'
+                    : 'Reminder: ${reminder.summary}',
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(FluentIcons.share_24_regular),
             onPressed: _share,
@@ -96,6 +131,7 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
             onPressed: _delete,
             tooltip: 'Delete',
           ),
+          remindersAction(context),
           settingsAction(context),
           const SizedBox(width: AppSpacing.s2),
         ],

@@ -11,6 +11,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:share_plus/share_plus.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
+import '../services/reminder_service.dart';
 import '../services/search_index.dart';
 import '../services/sort_controller.dart';
 import '../services/storage_service.dart';
@@ -19,11 +20,14 @@ import '../theme/app_spacing.dart';
 import '../utils/format_bytes.dart';
 import '../utils/format_date.dart';
 import '../widgets/app_dialogs.dart';
+import '../widgets/app_toast.dart';
 import '../widgets/breadcrumbs.dart';
 import '../widgets/document_thumbnail.dart';
 import '../widgets/folder_picker_sheet.dart';
 import '../widgets/folder_tile.dart';
 import '../widgets/item_views.dart';
+import '../widgets/reminder_dialog.dart';
+import '../widgets/reminders_action.dart';
 import '../widgets/searchable_app_bar.dart';
 import '../widgets/settings_action.dart';
 import '../widgets/view_mode_action.dart';
@@ -56,12 +60,14 @@ class _FolderScreenState extends State<FolderScreen> {
     _load();
     SortController.order.addListener(_load);
     SearchIndex.revision.addListener(_onIndexChanged);
+    ReminderService.revision.addListener(_onRemindersChanged);
   }
 
   @override
   void dispose() {
     SortController.order.removeListener(_load);
     SearchIndex.revision.removeListener(_onIndexChanged);
+    ReminderService.revision.removeListener(_onRemindersChanged);
     super.dispose();
   }
 
@@ -84,6 +90,11 @@ class _FolderScreenState extends State<FolderScreen> {
     if (_query.isNotEmpty && mounted) setState(() {});
   }
 
+  /// A reminder was set or removed; refresh the dates shown on documents.
+  void _onRemindersChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> _load() async {
     final folders = await StorageService.listSubfolders(widget.folder);
     final docs = await StorageService.listDocuments(widget.folder);
@@ -98,18 +109,6 @@ class _FolderScreenState extends State<FolderScreen> {
     });
   }
 
-  void _showError(Object e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-    );
-  }
-
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
-
   // --- Subfolders ---------------------------------------------------------
 
   Future<void> _createSubfolder() async {
@@ -122,9 +121,10 @@ class _FolderScreenState extends State<FolderScreen> {
     if (name == null || name.trim().isEmpty) return;
     try {
       await StorageService.createSubfolder(widget.folder, name);
+      AppToast.success('Folder "${name.trim()}" created');
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -140,9 +140,10 @@ class _FolderScreenState extends State<FolderScreen> {
     if (name == null || name.trim().isEmpty || name == current) return;
     try {
       await StorageService.renameFolder(folder, name);
+      AppToast.success('Folder renamed to "${name.trim()}"');
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -154,7 +155,12 @@ class _FolderScreenState extends State<FolderScreen> {
           '"${p.basename(folder.path)}" and everything inside it will be permanently deleted.',
     );
     if (confirmed == true) {
-      await StorageService.deleteFolder(folder);
+      try {
+        await StorageService.deleteFolder(folder);
+        AppToast.success('Folder deleted');
+      } catch (e) {
+        AppToast.error(e);
+      }
       await _load();
     }
   }
@@ -215,9 +221,10 @@ class _FolderScreenState extends State<FolderScreen> {
       final resultPath = await _captureAndCropPage();
       if (resultPath == null) return;
       await StorageService.importFile(widget.folder, resultPath);
+      AppToast.success('Document scanned');
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -267,9 +274,12 @@ class _FolderScreenState extends State<FolderScreen> {
       final bytes = await _buildPdfBytes(pages);
       final stamp = DateTime.now().millisecondsSinceEpoch;
       await StorageService.saveBytes(widget.folder, 'Scan_$stamp.pdf', bytes);
+      AppToast.success(
+        'PDF saved (${pages.length} page${pages.length == 1 ? '' : 's'})',
+      );
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -293,9 +303,10 @@ class _FolderScreenState extends State<FolderScreen> {
       final picked = await ImagePicker().pickVideo(source: ImageSource.camera);
       if (picked == null) return;
       await StorageService.importFile(widget.folder, picked.path);
+      AppToast.success('Video saved');
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -309,15 +320,25 @@ class _FolderScreenState extends State<FolderScreen> {
         ),
       );
       if (assets == null || assets.isEmpty) return;
+      var added = 0;
       for (final asset in assets) {
         final file = await asset.originFile;
         if (file != null) {
           await StorageService.importFile(widget.folder, file.path);
+          added++;
         }
+      }
+      if (added == assets.length) {
+        AppToast.success('Added $added item${added == 1 ? '' : 's'}');
+      } else {
+        AppToast.warning(
+          'Added $added of ${assets.length} items. '
+          'Some could not be read from the gallery.',
+        );
       }
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -327,9 +348,10 @@ class _FolderScreenState extends State<FolderScreen> {
       final path = result?.path;
       if (path == null) return;
       await StorageService.importFile(widget.folder, path);
+      AppToast.success('File imported');
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -396,7 +418,7 @@ class _FolderScreenState extends State<FolderScreen> {
         ),
       );
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -415,12 +437,12 @@ class _FolderScreenState extends State<FolderScreen> {
         await StorageService.moveDocument(file, target);
         moved++;
       }
-      _showMessage(
+      AppToast.success(
         'Moved ${moved == 1 ? 'document' : '$moved documents'} '
         'to "${p.basename(target.path)}"',
       );
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
     _clearSelection();
     await _load();
@@ -433,8 +455,17 @@ class _FolderScreenState extends State<FolderScreen> {
       message: 'The selected documents will be permanently deleted.',
     );
     if (confirmed != true) return;
-    for (final file in files) {
-      await StorageService.deleteDocument(file);
+    try {
+      for (final file in files) {
+        await StorageService.deleteDocument(file);
+      }
+      AppToast.success(
+        files.length == 1
+            ? 'Document deleted'
+            : '${files.length} documents deleted',
+      );
+    } catch (e) {
+      AppToast.error(e);
     }
     _clearSelection();
     await _load();
@@ -505,9 +536,9 @@ class _FolderScreenState extends State<FolderScreen> {
         fileName: p.basename(file.path),
         bytes: bytes,
       );
-      if (saved != null) _showMessage('Saved to device');
+      if (saved != null) AppToast.success('Saved to device');
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -523,9 +554,10 @@ class _FolderScreenState extends State<FolderScreen> {
     if (name == null || name.trim().isEmpty || name == current) return;
     try {
       await StorageService.renameDocument(file, name);
+      AppToast.success('Document renamed');
       await _load();
     } catch (e) {
-      _showError(e);
+      AppToast.error(e);
     }
   }
 
@@ -536,12 +568,18 @@ class _FolderScreenState extends State<FolderScreen> {
       message: '"${p.basename(file.path)}" will be permanently deleted.',
     );
     if (confirmed == true) {
-      await StorageService.deleteDocument(file);
+      try {
+        await StorageService.deleteDocument(file);
+        AppToast.success('Document deleted');
+      } catch (e) {
+        AppToast.error(e);
+      }
       await _load();
     }
   }
 
   Future<void> _openDocumentMenu(File file) async {
+    final hasReminder = ReminderService.reminderFor(file) != null;
     final choice = await AppDialogs.showActionSheet(
       context,
       actions: [
@@ -549,6 +587,11 @@ class _FolderScreenState extends State<FolderScreen> {
           id: 'rename',
           icon: FluentIcons.rename_24_regular,
           label: 'Rename',
+        ),
+        AppSheetAction(
+          id: 'reminder',
+          icon: FluentIcons.calendar_clock_24_regular,
+          label: hasReminder ? 'Edit reminder' : 'Set reminder',
         ),
         const AppSheetAction(
           id: 'move',
@@ -576,6 +619,8 @@ class _FolderScreenState extends State<FolderScreen> {
     switch (choice) {
       case 'rename':
         await _renameDocument(file);
+      case 'reminder':
+        if (mounted) await editDocumentReminder(context, file);
       case 'move':
         await _moveDocuments([file]);
       case 'share':
@@ -612,7 +657,11 @@ class _FolderScreenState extends State<FolderScreen> {
                 title: p.basename(widget.folder.path),
                 hintText: 'Search this folder',
                 onQueryChanged: (q) => setState(() => _query = q),
-                actions: [viewModeAction(), settingsAction(context)],
+                actions: [
+                  viewModeAction(),
+                  remindersAction(context),
+                  settingsAction(context),
+                ],
               ),
               _buildSelectionBar(),
             ],
@@ -798,7 +847,10 @@ class _DocumentTile extends StatelessWidget {
     final theme = Theme.of(context);
     final stat = file.statSync();
     final title = p.basename(file.path);
-    final subtitle = formatBytes(stat.size);
+    final reminder = ReminderService.reminderFor(file);
+    final subtitle = reminder == null
+        ? formatBytes(stat.size)
+        : '${formatBytes(stat.size)} · ${reminder.summary}';
     final date = formatDate(stat.modified);
     final trailing = selecting
         ? Icon(
