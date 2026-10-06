@@ -8,7 +8,7 @@ import '../screens/reminders_screen.dart';
 /// calendar icon that sets a single document's reminder.
 Widget remindersAction(BuildContext context) {
   return IconButton(
-    icon: const Icon(FluentIcons.calendar_clock_24_regular),
+    icon: const Icon(FluentIcons.alert_24_regular),
     tooltip: 'Reminders',
     onPressed: () => Navigator.push(
       context,

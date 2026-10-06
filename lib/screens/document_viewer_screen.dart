@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
-import 'package:video_player/video_player.dart';
 
 import '../services/reminder_service.dart';
 import '../services/storage_service.dart';
@@ -18,6 +17,7 @@ import '../widgets/app_toast.dart';
 import '../widgets/reminder_dialog.dart';
 import '../widgets/reminders_action.dart';
 import '../widgets/settings_action.dart';
+import '../widgets/video_player_view.dart';
 
 class DocumentViewerScreen extends StatefulWidget {
   const DocumentViewerScreen({super.key, required this.file});
@@ -139,7 +139,7 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
       body: isImage
           ? Center(child: InteractiveViewer(child: Image.file(file)))
           : isVideo
-              ? _VideoPlayerView(file: file)
+              ? VideoPlayerView(file: file)
               : Center(
                   child: Padding(
                     padding: const EdgeInsets.all(AppSpacing.s7),
@@ -183,120 +183,5 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
     return (isImage || isVideo)
         ? Theme(data: AppTheme.mediaViewer, child: scaffold)
         : scaffold;
-  }
-}
-
-class _VideoPlayerView extends StatefulWidget {
-  const _VideoPlayerView({required this.file});
-
-  final File file;
-
-  @override
-  State<_VideoPlayerView> createState() => _VideoPlayerViewState();
-}
-
-class _VideoPlayerViewState extends State<_VideoPlayerView> {
-  late final VideoPlayerController _controller;
-  bool _ready = false;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = VideoPlayerController.file(widget.file)
-      ..initialize().then((_) {
-        if (!mounted) return;
-        setState(() => _ready = true);
-      }).catchError((e) {
-        if (!mounted) return;
-        setState(() => _error = e.toString());
-      });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_error != null) {
-      return Center(
-        child: Text(
-          'Could not play this video.',
-          style: Theme.of(context).textTheme.bodyLarge,
-        ),
-      );
-    }
-    if (!_ready) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return Center(
-      child: AspectRatio(
-        aspectRatio: _controller.value.aspectRatio,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            VideoPlayer(_controller),
-            _VideoControls(controller: _controller),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _VideoControls extends StatefulWidget {
-  const _VideoControls({required this.controller});
-
-  final VideoPlayerController controller;
-
-  @override
-  State<_VideoControls> createState() => _VideoControlsState();
-}
-
-class _VideoControlsState extends State<_VideoControls> {
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.addListener(_onTick);
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_onTick);
-    super.dispose();
-  }
-
-  void _onTick() => setState(() {});
-
-  @override
-  Widget build(BuildContext context) {
-    final playing = widget.controller.value.isPlaying;
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          playing ? widget.controller.pause() : widget.controller.play();
-        });
-      },
-      child: AnimatedOpacity(
-        opacity: playing ? 0 : 1,
-        duration: const Duration(milliseconds: 150),
-        child: Container(
-          width: 64,
-          height: 64,
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.45),
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(
-            FluentIcons.play_24_filled,
-            color: Colors.white,
-            size: 30,
-          ),
-        ),
-      ),
-    );
   }
 }
