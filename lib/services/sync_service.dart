@@ -2,17 +2,29 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sign_in_as_googleapis_auth.dart';
 import 'package:flutter/widgets.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'google_config.dart';
 import 'storage_service.dart';
 
-enum SyncPhase { notConfigured, signedOut, idle, syncing, error }
+enum SyncPhase {
+  notConfigured,
+  signedOut,
+  idle,
+  syncing,
+  error,
+
+  /// Signed in, but [SyncService.wifiOnly] is on and the phone isn't on
+  /// Wi-Fi. Syncs again by itself once it is.
+  waitingForWifi,
+}
 
 @immutable
 class SyncStatus {
@@ -67,15 +79,23 @@ class SyncStatus {
 /// Files in Drive the state doesn't know about (from another device, an
 /// earlier install or another sign-in) are linked when they sit at the same
 /// path, and otherwise left alone - never deleted.
+///
+/// With [wifiOnly] on, nothing is synced over mobile data: a sync waits for
+/// Wi-Fi (or ethernet), and one that loses Wi-Fi stops before its next
+/// upload.
 class SyncService {
   static const _scopes = [drive.DriveApi.driveFileScope];
   static const _folderMime = 'application/vnd.google-apps.folder';
   static const _remoteRootName = 'DocManager';
   static const _debounce = Duration(seconds: 2);
+  static const _wifiOnlyKey = 'backup_wifi_only';
 
   static final status = ValueNotifier<SyncStatus>(
     const SyncStatus(SyncPhase.notConfigured),
   );
+
+  /// Back up only over Wi-Fi, since videos can use a lot of mobile data.
+  static final wifiOnly = ValueNotifier<bool>(false);
 
   static GoogleSignInAccount? _account;
   static _SyncState _state = _SyncState();
@@ -96,6 +116,9 @@ class SyncService {
     if (!GoogleConfig.isConfigured) return;
     try {
       _state = await _SyncState.load();
+      final prefs = await SharedPreferences.getInstance();
+      wifiOnly.value = prefs.getBool(_wifiOnlyKey) ?? false;
+      Connectivity().onConnectivityChanged.listen(_onConnectivityChanged);
       await GoogleSignIn.instance.initialize(
         clientId: Platform.isIOS ? GoogleConfig.iosClientId : null,
         serverClientId: Platform.isAndroid ? GoogleConfig.webClientId : null,
@@ -145,6 +168,15 @@ class SyncService {
     _setStatus(SyncPhase.signedOut);
   }
 
+  static Future<void> setWifiOnly(bool enabled) async {
+    wifiOnly.value = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_wifiOnlyKey, enabled);
+    // Turned off: start the waiting sync. Turned on: a running sync stops
+    // before its next upload if this isn't Wi-Fi.
+    if (status.value.phase == SyncPhase.waitingForWifi) requestSync();
+  }
+
   // --- Triggers --------------------------------------------------------------
 
   /// Schedules a sync shortly, coalescing bursts of changes into one run.
@@ -157,6 +189,28 @@ class SyncService {
   static Future<void> syncNow() {
     _timer?.cancel();
     return _run();
+  }
+
+  static void _onConnectivityChanged(List<ConnectivityResult> results) {
+    final phase = status.value.phase;
+    if ((phase == SyncPhase.waitingForWifi || phase == SyncPhase.error) &&
+        _allowedOn(results)) {
+      requestSync();
+    }
+  }
+
+  static bool _allowedOn(List<ConnectivityResult> results) =>
+      !wifiOnly.value ||
+      results.contains(ConnectivityResult.wifi) ||
+      results.contains(ConnectivityResult.ethernet);
+
+  /// Throws [_WaitingForWifi] if [wifiOnly] rules out the current
+  /// connection.
+  static Future<void> _checkConnection() async {
+    if (!wifiOnly.value) return;
+    if (!_allowedOn(await Connectivity().checkConnectivity())) {
+      throw _WaitingForWifi();
+    }
   }
 
   /// Called by [StorageService] after it renames a file or folder, so the
@@ -178,14 +232,17 @@ class SyncService {
     _running = true;
     _uploaded = 0;
     _toUpload = 0;
-    _setStatus(SyncPhase.syncing);
     try {
+      await _checkConnection();
+      _setStatus(SyncPhase.syncing);
       do {
         _again = false;
         await _syncOnce();
       } while (_again);
       _state.lastSynced = DateTime.now();
       _setStatus(SyncPhase.idle);
+    } on _WaitingForWifi {
+      _setStatus(SyncPhase.waitingForWifi);
     } on _NeedsSignIn {
       _account = null;
       _setStatus(
@@ -229,10 +286,7 @@ class SyncService {
   /// How many files [_mirror] will upload, for the progress display. Mirrors
   /// its decisions (an estimate only; [_uploadContent] grows the total if it
   /// turns out low).
-  static int _countUploads(
-    Map<String, _LocalItem> local,
-    _RemoteTree remote,
-  ) {
+  static int _countUploads(Map<String, _LocalItem> local, _RemoteTree remote) {
     var count = 0;
     for (final MapEntry(key: path, value: l) in local.entries) {
       if (l.isDir) continue;
@@ -447,6 +501,7 @@ class SyncService {
     String? parentId,
     String? existingId,
   }) async {
+    await _checkConnection();
     final file = File(_absolute(root, path));
     final media = drive.Media(file.openRead(), l.size);
     final options = l.size > 5 * 1024 * 1024
@@ -594,6 +649,8 @@ class SyncService {
 }
 
 class _NeedsSignIn implements Exception {}
+
+class _WaitingForWifi implements Exception {}
 
 class _LocalItem {
   const _LocalItem({

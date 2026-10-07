@@ -90,7 +90,7 @@ class SettingsScreen extends StatelessWidget {
             child: ListTile(
               leading: Icon(FluentIcons.info_24_regular),
               title: Text('Doc Manager'),
-              subtitle: Text('Version 1.0.5'),
+              subtitle: Text('Version 1.0.7'),
             ),
           ),
         ],
@@ -181,6 +181,8 @@ class _DriveSyncCard extends StatelessWidget {
       AppToast.error(status.message ?? 'Sync failed');
     } else if (status.phase == SyncPhase.idle) {
       AppToast.success('Backup is up to date');
+    } else if (status.phase == SyncPhase.waitingForWifi) {
+      AppToast.success('Backup will start when you connect to Wi-Fi');
     }
   }
 
@@ -217,8 +219,10 @@ class _DriveSyncCard extends StatelessWidget {
           case SyncPhase.idle:
           case SyncPhase.syncing:
           case SyncPhase.error:
+          case SyncPhase.waitingForWifi:
             final syncing = status.phase == SyncPhase.syncing;
             final error = status.phase == SyncPhase.error;
+            final waiting = status.phase == SyncPhase.waitingForWifi;
             final colors = Theme.of(context).colorScheme;
             return Column(
               children: [
@@ -226,6 +230,8 @@ class _DriveSyncCard extends StatelessWidget {
                   leading: Icon(
                     error
                         ? FluentIcons.cloud_dismiss_24_regular
+                        : waiting
+                        ? FluentIcons.wifi_off_24_regular
                         : syncing
                         ? FluentIcons.cloud_sync_24_regular
                         : FluentIcons.cloud_checkmark_24_regular,
@@ -237,6 +243,8 @@ class _DriveSyncCard extends StatelessWidget {
                       : Text(
                           error
                               ? status.message ?? 'Sync failed'
+                              : waiting
+                              ? 'Waiting for Wi-Fi'
                               : _lastSyncedLabel(status.lastSynced),
                         ),
                   trailing: syncing
@@ -246,6 +254,19 @@ class _DriveSyncCard extends StatelessWidget {
                           icon: const Icon(FluentIcons.arrow_sync_24_regular),
                           onPressed: _syncNow,
                         ),
+                ),
+                const Divider(height: 1),
+                ValueListenableBuilder<bool>(
+                  valueListenable: SyncService.wifiOnly,
+                  builder: (context, wifiOnly, _) => SwitchListTile(
+                    secondary: const Icon(FluentIcons.wifi_1_24_regular),
+                    title: const Text('Back up over Wi-Fi only'),
+                    subtitle: const Text(
+                      'Avoid using mobile data for large videos',
+                    ),
+                    value: wifiOnly,
+                    onChanged: SyncService.setWifiOnly,
+                  ),
                 ),
                 const Divider(height: 1),
                 ListTile(
@@ -377,7 +398,8 @@ class _StorageCardState extends State<_StorageCard> {
             final signedIn =
                 status.phase == SyncPhase.idle ||
                 status.phase == SyncPhase.syncing ||
-                status.phase == SyncPhase.error;
+                status.phase == SyncPhase.error ||
+                status.phase == SyncPhase.waitingForWifi;
             if (!signedIn || status.backupBytes == null) {
               return const SizedBox.shrink();
             }

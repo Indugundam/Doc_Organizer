@@ -10,7 +10,8 @@ folder. Optionally, users can connect their Google account in Settings to
 back up their folders to a `DocManager` folder in their own Google Drive.
 Backup is one-way: Drive mirrors the device, and nothing is ever downloaded
 to the device. There is no server of ours involved - the app talks to Google Drive
-directly.
+directly. Backup can be limited to Wi-Fi in Settings, so large videos don't
+use mobile data.
 
 ## Installing the APK on your phone
 
